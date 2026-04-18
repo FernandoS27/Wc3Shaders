@@ -77,10 +77,26 @@ public float3 cookTorranceSpecular(
 // roughness so glancing, high-frequency normals don't alias into
 // flickering specular speckles. The variance is clamped so extremely
 // tangent surfaces (silhouettes) don't go fully diffuse.
+//
+// Metal and WGSL fragment stages cannot emit the coarse derivative
+// intrinsics, so we fall back to the default-granularity `ddx`/`ddy`
+// there. The variance estimate is an approximation either way.
 public float specularAA(float roughnessMip, float3 worldNormal)
 {
-    float3 dnx = ddx_coarse(worldNormal);
-    float3 dny = ddy_coarse(worldNormal);
+    float3 dnx;
+    float3 dny;
+    __target_switch
+    {
+    case metal:
+    case wgsl:
+        dnx = ddx(worldNormal);
+        dny = ddy(worldNormal);
+        break;
+    default:
+        dnx = ddx_coarse(worldNormal);
+        dny = ddy_coarse(worldNormal);
+        break;
+    }
     float variance = 2.0 * (dot(dnx, dnx) + dot(dny, dny));
     variance = min(NDF_VAR_CLAMP, variance);
     float a2 = roughnessMip * roughnessMip + variance;

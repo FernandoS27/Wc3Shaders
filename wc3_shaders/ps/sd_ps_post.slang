@@ -26,7 +26,7 @@ public float4 sdDebugVisualize(float4 result, PSInput input, bool isFrontFace)
     float3 normalWS = normalize(input.normalWS.xyz);
     normalWS = isFrontFace ? normalWS : -normalWS;
 
-    float lodVal = t_albedo.CalculateLevelOfDetail(s_albedo, input.uv.xy);
+    float lodVal = queryTextureLOD(t_albedo, s_albedo, input.uv.xy);
     float lodFrac = frac(lodVal) * DBG_LOD_BIAS + DBG_LOD_BIAS;
     int lodInt = (int)lodVal;
 

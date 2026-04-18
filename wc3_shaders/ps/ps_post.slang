@@ -69,6 +69,29 @@ public float3 computeMRTNormal(PSInput input, bool isFrontFace)
     return worldNormal * NORMAL_PACK_SCALE + NORMAL_PACK_BIAS;
 }
 
+// Active mip level for a 2D sample. WGSL has no direct
+// `CalculateLevelOfDetail` intrinsic so we reconstruct the LOD from
+// scaled-UV derivatives there; every other target uses the native call.
+// The derivative form matches the spec's definition for the trilinear
+// case (log2 of the max footprint axis length in texels).
+public float queryTextureLOD(Texture2D<float4> tex, SamplerState samp, float2 uv)
+{
+    __target_switch
+    {
+    case wgsl:
+        {
+            uint w, h;
+            tex.GetDimensions(w, h);
+            float2 scaledUV = uv * float2(w, h);
+            float2 dx = ddx(scaledUV);
+            float2 dy = ddy(scaledUV);
+            return 0.5 * log2(max(dot(dx, dx), dot(dy, dy)));
+        }
+    default:
+        return tex.CalculateLevelOfDetail(samp, uv);
+    }
+}
+
 // Debug visualisation router. `psCB3.debugMode` picks which view to
 // emit; mode 0 is the normal-game visualisation path (still applies
 // the color matrix), mode 1 shows raw albedo, mode 2 visualises the
@@ -79,7 +102,7 @@ public float3 computeMRTNormal(PSInput input, bool isFrontFace)
 public float4 debugVisualize(float4 color, PSInput input,
     float3 worldNormal, float normalLen)
 {
-    float lodVal = t_albedo.CalculateLevelOfDetail(s_albedo, input.uv.xy);
+    float lodVal = queryTextureLOD(t_albedo, s_albedo, input.uv.xy);
     float lodFrac = frac(lodVal);
     lodFrac = lodFrac * DBG_LOD_BIAS + DBG_LOD_BIAS;
     int lodInt = (int)lodVal;
