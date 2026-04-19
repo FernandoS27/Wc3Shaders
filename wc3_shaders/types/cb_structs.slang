@@ -35,7 +35,7 @@ public struct PSPerDraw
     float   fogDensity;       float  _p1;
     float4  fogColor;
     float4x4 worldView;
-    float4x4 invView;
+    float4x4 view;
     float4x4 projection;
     float4  viewport;
     float   inverseSoftness;  float  cloakAmount;
@@ -262,7 +262,7 @@ public struct WaterPSPerDraw
     float4  fogColor;                              // cb2[2]
 
     float4x4 _padWorldView;                        // cb2[3..6] (unused by water)
-    float4x4 invView;                              // cb2[7..10]
+    float4x4 view;                                 // cb2[7..10]
     float4x4 worldToClip;                          // cb2[11..14]
     float4   viewport;                             // cb2[15]
 

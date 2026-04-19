@@ -30,8 +30,8 @@ implementing wc3_shaders;
 // blends between the probe and the light's ambient color and a "lower"
 // path that is scaled down by the NdotL coverage so unlit sides darken
 // gracefully as the diffuse light fades out.
-static const float IBL_SPLIT_UPPER = 0.675000012;
-static const float IBL_SPLIT_LOWER = 0.324999988;
+static const float BLIZZARD_AMBIENT_SPLIT_UPPER = 0.675000012;
+static const float BLIZZARD_AMBIENT_SPLIT_LOWER = 0.324999988;
 
 public struct IBLSampleResult
 {
@@ -50,8 +50,8 @@ public struct IBLSampleResult
 // the cubemap coord convert from the engine's Z-up world to the
 // cubemap's Y-up, right-handed sampling convention.
 public IBLSampleResult sampleIBL(
-    float3 worldPos, float3 worldNormal, float roughnessAA,
-    float4x4 invView, float envFromMipEnd, float envToMipEnd, float envTransitionT)
+    float3 viewPos, float3 viewNormal, float roughnessAA,
+    float4x4 worldToView, float envFromMipEnd, float envToMipEnd, float envTransitionT)
 {
     IBLSampleResult result;
 
@@ -59,19 +59,20 @@ public IBLSampleResult sampleIBL(
     float iblTest = envFromMipEnd * envToMipEnd;
     if (iblTest != 0.0)
     {
-        // Transform position and normal into probe space. The probes are
-        // authored in view space so we rotate from world back into view
-        // using the transposed view matrix (invView).
-        float3 viewPosDir  = normalize(mul((float3x3)invView, worldPos).xzy);
-        float3 viewNormal  = normalize(mul((float3x3)invView, worldNormal).xzy);
+        // Remap the engine's view-space vectors into the probe cubemap's
+        // sampling basis. `worldToView` is kept here because the engine's
+        // uploaded matrix matches the probe-space rotation expected by the
+        // original shader path.
+        float3 probePosDir    = normalize(mul((float3x3)worldToView, viewPos).xzy);
+        float3 probeNormalDir = normalize(mul((float3x3)worldToView, viewNormal).xzy);
 
         // Reflection vector for the specular lobe sample.
-        float VdotN = dot(viewPosDir, viewNormal);
-        float3 reflDir = viewPosDir - viewNormal * (VdotN + VdotN);
+        float VdotN = dot(probePosDir, probeNormalDir);
+        float3 reflDir = probePosDir - probeNormalDir * (VdotN + VdotN);
         reflDir = normalize(reflDir);
 
         // Diffuse irradiance sampled at mip 0 (slice 0).
-        float4 diffCoord = float4(viewNormal * float3(1, 1, -1), 0);
+        float4 diffCoord = float4(probeNormalDir * float3(1, 1, -1), 0);
         float3 diffFrom = t_iblFrom.Sample(s_iblFrom, diffCoord).xyz;
         float3 diffTo   = t_iblTo.Sample(s_iblTo, diffCoord).xyz;
         result.diffuseIrradiance = envTransitionT * (diffTo - diffFrom) + diffFrom;
@@ -87,7 +88,7 @@ public IBLSampleResult sampleIBL(
         // Split-sum BRDF LUT: x is the Fresnel scale, y is the bias.
         // We pass the unclamped NdotV so glancing pixels are allowed to
         // darken past zero, which is what the LUT was baked against.
-        float NdotV_unclamped = dot(worldNormal, normalize(-worldPos));
+        float NdotV_unclamped = dot(viewNormal, normalize(-viewPos));
         float2 lutCoord = float2(NdotV_unclamped, roughnessAA);
         result.brdfLUT = t_brdfLut.Sample(s_brdfLut, lutCoord).xy;
         result.isActive = 1.0;
@@ -129,13 +130,13 @@ public float3 blizzardAmbientBlend(
     float3 delta = normAmbient - normIBL;
 
     // "Upper" term — dominant when the surface is lit (high NdotL).
-    float3 upper = delta * IBL_SPLIT_UPPER + normIBL;
+    float3 upper = delta * BLIZZARD_AMBIENT_SPLIT_UPPER + normIBL;
     upper *= maxDiffIBL;
     upper = upper * totalWeight - analyticalAmbient;
     upper = iblActive * upper + analyticalAmbient;
 
     // "Lower" term — dominant on the shadow side (low NdotL).
-    float3 lower = delta * IBL_SPLIT_LOWER + normIBL;
+    float3 lower = delta * BLIZZARD_AMBIENT_SPLIT_LOWER + normIBL;
     lower *= maxDiffIBL;
 
     float3 lowerScaled = lower * ambientIBLWeight;
@@ -150,7 +151,7 @@ public float3 blizzardAmbientBlend(
 // roughness-dependent BRDF constants (a², a⁴, k) are pre-hoisted
 // outside the loop since they don't change across lights.
 public float3 lightLoop(
-    float3 worldPos, float3 worldNormal, float3 viewDir, float viewDirLen,
+    float3 viewPos, float3 viewNormal, float3 viewDir, float viewDirLen,
     float3 F0, float3 oneMinusF0, float3 lambertianDiffuse,
     float roughnessAA, float NdotV_precomp,
     uint startLight)
@@ -182,7 +183,7 @@ public float3 lightLoop(
         {
             // Point light: direction toward the light + inverse-square
             // attenuation (with the tiny distance bias from POINT_EPS).
-            float3 lightVec = light.position - worldPos;
+            float3 lightVec = light.position - viewPos;
             float distSq = dot(lightVec, lightVec);
             float dist = sqrt(distSq);
             attenuation = pointLightAttenuation(distSq, dist);
@@ -199,8 +200,8 @@ public float3 lightLoop(
         // can share intermediates (H, VdotH, NdotH) across D/F/V.
         float3 H = normalize(viewDir + lightDir);
         float VdotH = dot(H, viewDir);
-        float NdotH = dot(worldNormal, H);
-        float NdotL = dot(worldNormal, lightDir);
+        float NdotH = dot(viewNormal, H);
+        float NdotL = dot(viewNormal, lightDir);
 
         // Schlick Fresnel (F = F0 + (1-F0)(1-VdotH)^5).
         float t = 1.0 - VdotH;
@@ -277,9 +278,9 @@ public float4 psIBLBody<
     if (HAS_DEBUG_VIS)
     {
         uint enabled = asuint(psCB3.enabledShaders);
-        if (enabled & 1)
+        if ((enabled & 1u) != 0)
             albedo.xyz = psCB3.overrideAlbedo;
-        if (enabled & 2)
+        if ((enabled & 2u) != 0)
             orm = psCB3.overrideOrm.yz;
     }
 
@@ -308,17 +309,17 @@ public float4 psIBLBody<
         emissive = ml.emissive;
     }
 
-    // Build the world-space normal and reconstruct a roughness mip that
+    // Build the view-space shading normal and reconstruct a roughness mip that
     // accounts for sub-pixel normal variance (specular-AA) when the
     // `useNdf` flag is set on this draw.
     float3 tsNormal = decodeNormalMap(normalSample);
-    float3 worldNormal = tangentToWorld(tsNormal, input.tangentWS.xyz, input.normalWS.xyz, input.tangentWS.w);
-    worldNormal = orientNormal(worldNormal, isFrontFace);
+    float3 viewNormal = tangentToWorld(tsNormal, input.tangentWS.xyz, input.normalWS.xyz, input.tangentWS.w);
+    viewNormal = orientNormal(viewNormal, isFrontFace);
 
     float roughnessMip = roughnessToMip(roughness);
-    float roughnessAA = psCB2.useNdf != 0 ? specularAA(roughnessMip, worldNormal) : roughnessMip;
+    float roughnessAA = psCB2.useNdf != 0 ? specularAA(roughnessMip, viewNormal) : roughnessMip;
 
-    // View direction. We reuse `viewDirLen` (= 1/|worldPos|) in later
+    // View direction. We reuse `viewDirLen` (= 1/|viewPos|) in later
     // dot products to avoid recomputing the normalisation.
     float viewDirLen = rsqrt(dot(-input.worldPos.xyz, -input.worldPos.xyz));
     float3 viewDir = -input.worldPos.xyz * viewDirLen;
@@ -347,9 +348,9 @@ public float4 psIBLBody<
         // Cook-Torrance for the main directional light.
         float3 H = normalize(viewDir + lightDir);
         float VdotH = dot(H, viewDir);
-        float NdotH = dot(worldNormal, H);
-        float NdotL = dot(worldNormal, lightDir);
-        float NdotV = dot(worldNormal, viewDir);
+        float NdotH = dot(viewNormal, H);
+        float NdotL = dot(viewNormal, lightDir);
+        float NdotV = dot(viewNormal, viewDir);
 
         float3 F = schlickFresnel(F0, VdotH);
         float D = ggxNDF(NdotH, roughnessAA);
@@ -366,8 +367,8 @@ public float4 psIBLBody<
 
         // Sample both IBL probes for this pixel.
         IBLSampleResult ibl = sampleIBL(
-            input.worldPos.xyz, worldNormal, roughnessAA,
-            psCB2.invView,
+            input.worldPos.xyz, viewNormal, roughnessAA,
+            psCB2.view,
             psCB2.envFromMipEnd, psCB2.envToMipEnd, psCB2.envTransitionT);
 
         float maxDiffuse = max(max(psCB2.lights[0].diffuse.x, psCB2.lights[0].diffuse.y), psCB2.lights[0].diffuse.z);
@@ -400,11 +401,11 @@ public float4 psIBLBody<
     }
 
     // Analytical loop for remaining lights.
-    float NdotV_precomp = dot(worldNormal, viewDir);
+    float NdotV_precomp = dot(viewNormal, viewDir);
     float3 oneMinusF0 = 1.0 - F0;
 
     float3 loopResult = lightLoop(
-        input.worldPos.xyz, worldNormal, viewDir, viewDirLen,
+        input.worldPos.xyz, viewNormal, viewDir, viewDirLen,
         F0, oneMinusF0, lambertianDiffuse,
         roughnessAA, NdotV_precomp,
         firstLightProcessed);

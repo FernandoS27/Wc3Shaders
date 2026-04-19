@@ -107,7 +107,7 @@ public float4 crystalIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
 
         IBLSampleResult ibl = sampleIBL(
             input.worldPos.xyz, worldNormal, roughnessAA,
-            psCB2.invView,
+            psCB2.view,
             psCB2.envFromMipEnd, psCB2.envToMipEnd, psCB2.envTransitionT);
 
         float maxDiffuse = max(max(psCB2.lights[0].diffuse.x, psCB2.lights[0].diffuse.y), psCB2.lights[0].diffuse.z);
