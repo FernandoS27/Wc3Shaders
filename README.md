@@ -2,28 +2,31 @@
 
 An open-source recreation of the shaders used by **Warcraft III: Reforged**, reverse-engineered from the game's shipped `.bls` shader bundles.
 
-The project reimplements the **SD**, **SD-on-HD**, and **HD** shader families in [Slang](https://shader-slang.com/), then re-packs the compiled bytecode back into the game's `.bls` wire format so patched shaders can be dropped into the game. Both the DirectX bundles (`ps/`, `vs/`) and the Metal bundles (`mtlfs/`, `mtlvs/`) are covered; Metal packing only runs when compiled on macOS, where Apple's Metal compiler is available.
+The project reimplements the **SD**, **SD-on-HD**, **HD**, **Crystal** and **water** shader families in [Slang](https://shader-slang.com/), then re-packs the compiled bytecode back into the game's `.bls` wire format so patched shaders can be dropped into the game. Both the DirectX bundles (`ps/`, `vs/`) and the Metal bundles (`mtlfs/`, `mtlvs/`) are covered; Metal packing only runs when compiled on macOS, where Apple's Metal compiler is available.
 
 ## What's in the repo
 
 | Path | Contents |
 | --- | --- |
-| [wc3_shaders/](wc3_shaders/) | Slang source. One unified module ([wc3_shaders.slang](wc3_shaders/wc3_shaders.slang)) exposes six entry points, one per shader family. |
+| [wc3_shaders/](wc3_shaders/) | Slang source. One unified module ([wc3_shaders.slang](wc3_shaders/wc3_shaders.slang)) exposes nine entry points, one per shader family. |
 | [compile_all_slang.py](compile_all_slang.py) | Compiles every permutation of every family to a chosen graphics API target (D3D11 by default). |
 | [build_bls.py](build_bls.py) | Packs the compiled DXBC blobs back into `.bls` files using the shipped `.bls` files as templates. |
 
 ## Shader families
 
-Six families cover every shader the game ships:
+Nine families cover every shader the game ships:
 
 | Family | Stage | Permutations |
 | --- | --- | --- |
 | `hd_vs` | Vertex | 144 |
 | `hd_ps` | Pixel | 512 |
+| `crystal_ps` | Pixel | 512 |
 | `sd_on_hd_vs` | Vertex | 144 |
 | `sd_on_hd_ps` | Pixel | 384 |
 | `sd_highspec_vs` | Vertex | 162 |
 | `sd_classic_ps` | Pixel | 200 |
+| `water_vs` | Vertex | 1 |
+| `water_ps` | Pixel | 4 |
 
 Each permutation is produced by specializing the corresponding Slang entry point on a set of interface types (skinning model, vertex format, fog mode, alpha-test, material, etc.). The exact permutation mapping lives in [compile_all_slang.py](compile_all_slang.py).
 

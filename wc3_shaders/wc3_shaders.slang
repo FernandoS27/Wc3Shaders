@@ -83,6 +83,9 @@ __include "ps/sd_ps_post";
 // SD classic pixel-shader body (fixed-function texture stages).
 __include "ps/sd_classic_ps_body";
 
+// Water pixel-shader body.
+__include "ps/water_ps_body";
+
 // Vertex-shader helpers.
 __include "vs/vs_body";
 __include "vs/sd_vs_lighting";
@@ -95,3 +98,5 @@ __include "sd_on_hd_ps";
 __include "sd_on_hd_vs";
 __include "sd_highspec_vs";
 __include "sd_classic_ps";
+__include "water_vs";
+__include "water_ps";

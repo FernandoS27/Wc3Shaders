@@ -9,7 +9,18 @@
 
 implementing wc3_shaders;
 
-// Object → world for a point (uses the full 4x4 with w=1).
+// Object → view for a point (uses the full 4x4 with w=1). Despite the
+// `worldPos` label on the PS input this produces, the output lives in view
+// space — the PS brings it back out into probe / world space via `invView`
+// when it needs to. Named after the matrix it applies.
+public float3 transformByWorldView(float3 pos, float4x4 worldView)
+{
+    return mul(worldView, float4(pos, 1.0)).xyz;
+}
+
+// Object → world for a point. Produces actual world-space coordinates —
+// used for fog altitude (.z vs clipHeight) and as the input to the shadow
+// cascade matrices.
 public float3 transformByWorld(float3 pos, float4x4 world)
 {
     return mul(world, float4(pos, 1.0)).xyz;
@@ -21,11 +32,13 @@ public float4 transformClipPos(float3 pos, float4x4 wvp)
     return mul(wvp, float4(pos, 1.0));
 }
 
-// Object → world for a direction, with renormalization. Used by the HD
-// path, which requires a unit-length world normal for BRDF evaluation.
-public float3 transformNormal(float3 n, float4x4 world)
+// Apply the upper 3x3 of a 4x4 transform to a direction, with
+// renormalization. Caller passes whichever object-space-rotating matrix
+// is relevant — typically the `worldView` matrix on the HD path, whose
+// 3x3 takes object directions to view space.
+public float3 transformNormal(float3 n, float4x4 m)
 {
-    float3 result = mul((float3x3)world, n);
+    float3 result = mul((float3x3)m, n);
     float len2 = dot(result, result);
     return result * rsqrt(len2);
 }
@@ -34,9 +47,9 @@ public float3 transformNormal(float3 n, float4x4 world)
 // passes this directly to the PS, which renormalises on demand — and
 // the skinning policy has already produced a unit-length vector for
 // skinned meshes.
-public float3 transformNormalRaw(float3 n, float4x4 world)
+public float3 transformNormalRaw(float3 n, float4x4 m)
 {
-    return mul((float3x3)world, n);
+    return mul((float3x3)m, n);
 }
 
 // Apply a 2×3 affine texture-coordinate transform stored as two 4-vec
@@ -81,27 +94,27 @@ public void computeShadowCascades(
     clip2 = mul(cascades.cascade2, viewPos);
 }
 
-// View-space position used by the fog/shadow math. Despite the name,
-// `viewProj` in the HD VSPerDraw is actually the view matrix — the
-// original engine's constant buffer naming was kept verbatim.
-public float4 computeViewPos(float3 pos, float4x4 viewProj)
+// World-space position used by the fog + shadow-cascade math. Its .z
+// carries the world-space altitude the fog apply() compares against
+// `clipHeight`; its full xyzw is the input the cascade matrices need.
+public float4 computeWorldPos4(float3 pos, float4x4 world)
 {
-    return mul(viewProj, float4(pos, 1.0));
+    return mul(world, float4(pos, 1.0));
 }
 
-// Biased view-space Z used by the fog apply() calls in the PS.
-// `clipHeight` lets the game push fog "up" above water lines and
-// `underWater` flips sign underwater so depth increases from the eye
-// downward, producing the underwater blue fall-off.
-public float computeFogDepth(float viewZ, float clipHeight, float underWater)
+// Biased world-space altitude used by the fog apply() calls in the PS.
+// `clipHeight` is the water-line altitude so the game can push fog "up"
+// above it, and `underWater` flips sign underwater so depth increases
+// from the eye downward, producing the underwater blue fall-off.
+public float computeFogDepth(float worldZ, float clipHeight, float underWater)
 {
-    return (viewZ - clipHeight) * underWater;
+    return (worldZ - clipHeight) * underWater;
 }
 
-// Fast path for computeViewPos().z when only Z is required (non-shadow
-// branches). Reading a single projection-matrix row saves 3 multiplies
-// and a transpose compared to computing the full view pos.
-public float computeScalarViewZ(float3 pos, float4x4 viewProj)
+// Fast path for computeWorldPos4().z when only Z is required (non-shadow
+// branches). Reading a single matrix row saves 3 multiplies and a
+// transpose compared to computing the full world pos.
+public float computeScalarWorldZ(float3 pos, float4x4 world)
 {
-    return dot(viewProj[2], float4(pos, 1.0));
+    return dot(world[2], float4(pos, 1.0));
 }

@@ -11,7 +11,7 @@ This is the inverse of extract_bls.py. For each shader family we:
      chunk layout exactly.
   4. Repack into the BLS wire format and write out the file.
 
-The seven shader-family -> Slang-output mapping lives in FAMILY_MAP /
+The nine shader-family -> Slang-output mapping lives in FAMILY_MAP /
 METAL_FAMILY_MAP below. Shipped BLS files live under
 war3.w3mod/shaders/{ps,vs,mtlfs,mtlvs}/*.bls. Slang outputs live under:
   <repo>/slang_out/d3d11/<family>/perm_NNN.dxbc      (DX, any platform)
@@ -59,9 +59,11 @@ FAMILY_MAP = {
     'crystal_ps':     ('ps', 'crystal.bls',     512),
     'sd_classic_ps':  ('ps', 'sd.bls',          200),
     'sd_on_hd_ps':    ('ps', 'sd_on_hd.bls',    384),
+    'water_ps':       ('ps', 'water.bls',         4),
     'hd_vs':          ('vs', 'hd.bls',          144),
     'sd_highspec_vs': ('vs', 'sd_highspec.bls', 162),
     'sd_on_hd_vs':    ('vs', 'sd_on_hd.bls',    144),
+    'water_vs':       ('vs', 'water.bls',         1),
 }
 
 # Same seven families, re-pointed at the Metal BLS bundles under mtlfs/ and
@@ -75,6 +77,8 @@ METAL_FAMILY_MAP = {
     'hd_vs':          ('mtlvs', 'hd.bls',          144),
     'sd_highspec_vs': ('mtlvs', 'sd_highspec.bls', 162),
     'sd_on_hd_vs':    ('mtlvs', 'sd_on_hd.bls',    144),
+    'water_vs':       ('mtlvs', 'water.bls',         1),
+    'water_ps':       ('mtlfs', 'water.bls',         4),
 }
 
 
@@ -495,7 +499,7 @@ def main():
                          'mtlfs/*.bls, mtlvs/*.bls (used when rebuilding Metal BLS)')
     ap.add_argument('--output', required=True, help='output directory for rebuilt BLS')
     ap.add_argument('--family', action='append', choices=list(FAMILY_MAP),
-                    help='limit to specific family (default: all 7)')
+                    help='limit to specific family (default: all 9)')
     ap.add_argument('--strip', action='store_true',
                     help='strip RDEF/STAT chunks from DXBC (match shipped chunk layout) '
                          'and recompute the DXBC hash')

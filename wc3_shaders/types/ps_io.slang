@@ -47,6 +47,20 @@ public struct SDPSInput
     float3 worldPos   : TEXCOORD1;
 };
 
+// Water pixel shader input. Matches `WaterVSOutput` slot-for-slot:
+// TEXCOORD2 is skipped (the water pass has no tangent attribute), the
+// world-space geometry normal arrives on TEXCOORD3, and TEXCOORD4
+// carries the per-object "up" axis used as the TBN tangent.
+public struct WaterPSInput
+{
+    float4 svPosition   : SV_Position;
+    float4 vertColor    : COLOR0;
+    float2 uv           : TEXCOORD0;
+    float3 worldPos     : TEXCOORD1;
+    float3 geomNormalWS : TEXCOORD3;
+    float4 upAxisWS     : TEXCOORD4;
+};
+
 // SD classic pipeline PS output. Single target; no MRT, no debug split.
 public struct SDPSOutput
 {

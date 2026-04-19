@@ -30,17 +30,17 @@ public VSOutput sd_on_hd_vs_main<
         input.weights, input.boneIndices, vsCB3,
         skinnedPos, skinnedNormal, skinnedTangent);
 
-    output.worldPos.xyz = transformByWorld(skinnedPos, vsCB2.world);
-    output.position = transformClipPos(skinnedPos, vsCB2.worldViewProj);
+    output.worldPos.xyz = transformByWorldView(skinnedPos, vsCB2.worldView);
+    output.position     = transformClipPos(skinnedPos, vsCB2.worldViewProj);
 
     // No renormalise — the SD PS does its own normalize() after
     // interpolation shortens the vector across the triangle.
-    output.normalWS.xyz = transformNormalRaw(skinnedNormal, vsCB2.world);
+    output.normalWS.xyz = transformNormalRaw(skinnedNormal, vsCB2.worldView);
     output.normalWS.w = 0;
 
     if (TVF.hasTangent)
     {
-        output.tangentWS.xyz = transformNormalRaw(skinnedTangent, vsCB2.world);
+        output.tangentWS.xyz = transformNormalRaw(skinnedTangent, vsCB2.worldView);
         output.tangentWS.w = input.tangent.w;
     }
     else
@@ -50,17 +50,19 @@ public VSOutput sd_on_hd_vs_main<
 
     if (HAS_SHADOWS)
     {
-        // Cascade clip coords for the SD shadow sampler.
-        float4 viewPos = computeViewPos(skinnedPos, vsCB2.viewProj);
-        output.worldPos.w = computeFogDepth(viewPos.z, vsCB2.clipHeight, vsCB2.underWater);
+        // Cascade clip coords for the SD shadow sampler — cascade
+        // matrices take world-space positions, so we need the `world`
+        // product (not the view-space one above).
+        float4 worldPos4 = computeWorldPos4(skinnedPos, vsCB2.world);
+        output.worldPos.w = computeFogDepth(worldPos4.z, vsCB2.clipHeight, vsCB2.underWater);
 
-        computeShadowCascades(viewPos, vsCB1,
+        computeShadowCascades(worldPos4, vsCB1,
             output.shadowClip0, output.shadowClip1, output.shadowClip2);
     }
     else
     {
-        float viewZ = computeScalarViewZ(skinnedPos, vsCB2.viewProj);
-        output.worldPos.w = computeFogDepth(viewZ, vsCB2.clipHeight, vsCB2.underWater);
+        float worldZ = computeScalarWorldZ(skinnedPos, vsCB2.world);
+        output.worldPos.w = computeFogDepth(worldZ, vsCB2.clipHeight, vsCB2.underWater);
 
         output.shadowClip0 = float4(0, 0, 0, 0);
         output.shadowClip1 = float4(0, 0, 0, 0);

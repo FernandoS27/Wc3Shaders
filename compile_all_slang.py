@@ -28,6 +28,7 @@ FAMILIES = (
     "hd_vs", "hd_ps", "crystal_ps",
     "sd_on_hd_vs", "sd_on_hd_ps",
     "sd_highspec_vs", "sd_classic_ps",
+    "water_vs", "water_ps",
 )
 
 # Stage → profile per target + output file extension and optional extra
@@ -183,12 +184,14 @@ def map_hd_vs(idx: int) -> PermSpec:
 
 
 def _hd_ps_bits(idx: int):
-    """Shared 9-bit feature encoding for hd_ps and crystal_ps (bit 2 /
-    EXTRA_VERTS is unused on both entries — it only affects the VS side
-    of the HD pipeline)."""
+    """Shared 9-bit feature encoding for hd_ps and crystal_ps. Bit 2 /
+    EXTRA_VERTS toggles the shadow cascade inputs the VS writes on
+    TEXCOORD4-6; the HD IBL PS consumes them for the 3-cascade PCF
+    shadow lookup."""
     return {
         "mrt":  bool(idx & 1),
         "dp":   bool(idx & 2),
+        "ev":   bool(idx & 4),
         "ibl":  bool(idx & 8),
         "fogL": bool(idx & 16),
         "fogE": bool(idx & 32),
@@ -210,27 +213,31 @@ def _hd_ps_types(b):
     alpha = "AlphaTestOn" if b["at"] else "AlphaTestOff"
     mat   = "MultiLayerMaterial" if b["ml"] else "StandardMaterial"
     iblS  = "true" if b["ibl"] else "false"
+    evS   = "true" if b["ev"] else "false"
     dpS   = "true" if b["dp"] else "false"
     mrtS  = "true" if b["mrt"] else "false"
     dbgS  = "true" if b["dbg"] else "false"
-    return fog, alpha, mat, iblS, dpS, mrtS, dbgS
+    return fog, alpha, mat, iblS, evS, dpS, mrtS, dbgS
 
 
 def map_hd_ps(idx: int) -> PermSpec:
     b = _hd_ps_bits(idx)
-    fog, alpha, mat, iblS, dpS, mrtS, dbgS = _hd_ps_types(b)
+    fog, alpha, mat, iblS, evS, dpS, mrtS, dbgS = _hd_ps_types(b)
     return PermSpec(
         entry="ps_main",
-        types=[fog, alpha, mat, iblS, dpS, mrtS, dbgS],
-        label=f"{fog}+{alpha}+{mat}+IBL={iblS}+DP={dpS}+MRT={mrtS}+DBG={dbgS}",
+        types=[fog, alpha, mat, iblS, evS, dpS, mrtS, dbgS],
+        label=f"{fog}+{alpha}+{mat}+IBL={iblS}+EV={evS}+DP={dpS}+MRT={mrtS}+DBG={dbgS}",
     )
 
 
 def map_crystal_ps(idx: int) -> PermSpec:
-    # Crystal shares hd_ps's 9-bit encoding one-for-one, so the bit
-    # unpack / type selection is identical — only the entry name differs.
+    # Crystal shares hd_ps's 9-bit encoding for most features. Bit 2 /
+    # EXTRA_VERTS is unused on crystal's PS signature (crystal doesn't
+    # expose a shadow-cascade path yet), so we drop it from the
+    # specialisation tuple — `crystal_ps_main` keeps the shorter
+    # 7-let form.
     b = _hd_ps_bits(idx)
-    fog, alpha, mat, iblS, dpS, mrtS, dbgS = _hd_ps_types(b)
+    fog, alpha, mat, iblS, _evS, dpS, mrtS, dbgS = _hd_ps_types(b)
     return PermSpec(
         entry="crystal_ps_main",
         types=[fog, alpha, mat, iblS, dpS, mrtS, dbgS],
@@ -324,6 +331,26 @@ STAGE_NAMES = [
 ]
 
 
+def map_water_vs(idx: int) -> PermSpec:
+    # Single permutation — no feature specialisation.
+    return PermSpec(entry="water_vs_main", types=[], label="(only)")
+
+
+def map_water_ps(idx: int) -> PermSpec:
+    # 4 permutations: FogNone / FogLinear / FogExponential / FogExp2.
+    fogL = bool(idx & 1)
+    fogE = bool(idx & 2)
+    if fogL and fogE:
+        fog = "FogExp2"
+    elif fogL:
+        fog = "FogLinear"
+    elif fogE:
+        fog = "FogExponential"
+    else:
+        fog = "FogNone"
+    return PermSpec(entry="water_ps_main", types=[fog], label=fog)
+
+
 def map_sd_classic_ps(idx: int) -> PermSpec:
     low     = idx & 7
     t0stage = (idx // 8) % 5
@@ -360,6 +387,8 @@ SWEEPS = [
     ("sd_on_hd_ps",    384, map_sd_on_hd_ps,    "ps"),
     ("sd_highspec_vs", 162, map_sd_highspec_vs, "vs"),
     ("sd_classic_ps",  200, map_sd_classic_ps,  "ps"),
+    ("water_vs",         1, map_water_vs,       "vs"),
+    ("water_ps",         4, map_water_ps,       "ps"),
 ]
 
 

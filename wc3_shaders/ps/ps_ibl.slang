@@ -236,16 +236,52 @@ public float3 lightLoop(
 
 // HD IBL + analytical pixel shader body. See file banner for the
 // overall flow; the comments below highlight the non-obvious steps.
-public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
+public float4 psIBLBody<
+    TMat : IMaterialLayer,
+    let HAS_EXTRA_VERTS : bool,
+    let HAS_DEBUG_VIS : bool>(
     PSInput input, bool isFrontFace)
 {
-    // Base material sampling. Multi-layer materials also read the team
-    // albedo + blend weight; `orm` here packs (AO, roughness, metalness)
-    // with the blend weight in the alpha channel.
+    // Shadow cascade attenuation — sampled up front so both the main
+    // directional light and the HLSL scheduler see the same register
+    // layout as the retail shader (shadow visibility lands in r2.z
+    // before the normal-map decode). Skipped when the VS didn't pass
+    // shadowClip coords (HAS_EXTRA_VERTS=false).
+    float shadowAtten = 1.0;
+    if (HAS_EXTRA_VERTS)
+    {
+        shadowAtten = sdSampleShadowCascades(
+            input.shadowClip0, input.shadowClip1, input.shadowClip2,
+            asuint(sdPsCB1.numCascades));
+    }
+
+    // Base material sampling. Multi-layer materials also need the blend
+    // weight from t2.w, so we take the .yzw swizzle up front and let
+    // the non-ML path ignore the .w lane — this matches the single
+    // sample op the retail shader emits.
     float4 albedo = t_albedo.Sample(s_albedo, input.uv.xy);
     float3 normalSample = t_normal.Sample(s_normal, input.uv.xy).xyw;
-    float2 orm = t_orm.Sample(s_orm, input.uv.xy).yz;
+    float3 ormFull = t_orm.Sample(s_orm, input.uv.xy).yzw;
+    float2 orm = ormFull.xy;
     float3 emissive = t_emissive.Sample(s_emissive, input.uv.xy).xyz;
+
+    // Debug overrides — applied right after the texture fetches so the
+    // override values feed every downstream consumer (ML blend, normal
+    // decode, Cook-Torrance). Matches the retail DXBC which emits the
+    // and+movc pair immediately after the t0/t1/t2/t3 samples.
+    //   bit 0 — replace albedo.rgb with overrideAlbedo.
+    //   bit 1 — replace (roughness, metalness) with overrideOrm.yz,
+    //           mirroring the cb3[2].yzyy movc in the original DXBC.
+    //           The ML blend weight (ormFull.z) is intentionally left
+    //           alone so debug doesn't reshape the team-color layer.
+    if (HAS_DEBUG_VIS)
+    {
+        uint enabled = asuint(psCB3.enabledShaders);
+        if (enabled & 1)
+            albedo.xyz = psCB3.overrideAlbedo;
+        if (enabled & 2)
+            orm = psCB3.overrideOrm.yz;
+    }
 
     float3 teamAlbedo = float3(0, 0, 0);
     float blendWeight = 0.0;
@@ -254,10 +290,6 @@ public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
 
     if (TMat.hasMultiLayer)
     {
-        // Overwrite the orm values with the second fetch so we pick up
-        // the blend weight without an extra texture read.
-        float3 ormFull = t_orm.Sample(s_orm, input.uv.xy).yzw;
-        orm = ormFull.xy;
         blendWeight = ormFull.z;
         teamAlbedo = t_teamColor.Sample(s_teamColor, input.uv.xy).xyz;
         teamLuma = max(max(teamAlbedo.x, teamAlbedo.y), teamAlbedo.z);
@@ -266,13 +298,6 @@ public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
 
     float roughness = orm.x;
     float metalness = orm.y;
-
-    // Debug: "Flat albedo" override.
-    if (HAS_DEBUG_VIS)
-    {
-        if (asint(psCB3.enabledShaders) & 1)
-            albedo.xyz = psCB3.overrideAlbedo;
-    }
 
     // Apply the multi-layer blend once so downstream math sees a single
     // effective albedo / emissive.
@@ -332,6 +357,13 @@ public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
         float3 spec = D * F * V;
         float clampedNdotL = max(0.0, NdotL);
 
+        // Shadow cascades attenuate only the main directional light's
+        // direct contribution (diffuse ambient modulation + direct
+        // specular). Indirect IBL terms stay unshadowed, matching the
+        // retail DXBC's `mul r2.x, r2.z, r2.x` fold that re-scales the
+        // clamped NdotL in-place before the ambient / specular combines.
+        float litNdotL = HAS_EXTRA_VERTS ? (clampedNdotL * shadowAtten) : clampedNdotL;
+
         // Sample both IBL probes for this pixel.
         IBLSampleResult ibl = sampleIBL(
             input.worldPos.xyz, worldNormal, roughnessAA,
@@ -341,10 +373,12 @@ public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
         float maxDiffuse = max(max(psCB2.lights[0].diffuse.x, psCB2.lights[0].diffuse.y), psCB2.lights[0].diffuse.z);
         float ambientWeight = psCB2.lights[0]._pad2.x; // Per-light ambient weight.
 
-        // Diffuse ambient: analytical+IBL mix, modulated by NdotL.
+        // Diffuse ambient: analytical+IBL mix, modulated by shadow-
+        // attenuated NdotL so the lit / shadow sides of the Blizzard
+        // ambient split respond to occlusion.
         float3 ambientResult = blizzardAmbientBlend(
             psCB2.lights[0].diffuse, ibl.diffuseIrradiance,
-            clampedNdotL, maxDiffuse, ibl.isActive, ambientWeight);
+            litNdotL, maxDiffuse, ibl.isActive, ambientWeight);
         ambientResult += psCB2.lights[0].ambient;
 
         // Direct + indirect specular combine. The direct spec is scaled
@@ -353,7 +387,7 @@ public float4 psIBLBody<TMat : IMaterialLayer, let HAS_DEBUG_VIS : bool>(
         // split-sum LUT (F0 * scale + bias) then modulates by the IBL
         // specular radiance.
         float totalWeight = maxDiffuse + ibl.isActive;
-        float3 scaledSpec = spec * totalWeight * clampedNdotL;
+        float3 scaledSpec = spec * totalWeight * litNdotL;
 
         float3 indirectSpec = F0 * ibl.brdfLUT.x + ibl.brdfLUT.y;
         float ambientIBLWeight = totalWeight * ibl.isActive * ambientWeight;

@@ -59,13 +59,24 @@ public struct ShadowCascades
 };
 
 // Per-draw constants for the HD vertex shader (b2).
-// Holds transforms, the fog-depth clip plane (used to pre-bias viewZ when
+// Holds transforms, the fog-depth clip plane (used to pre-bias world Z when
 // underwater), vertex-color tint, and two 2x3 texture-coordinate matrices
 // stored as two float4 rows each (the .z column is unused).
+//
+// Matrix field ordering here matches the engine's upload offsets exactly:
+//   world          @ 0x000 — object → world.  Its .z after the transform
+//                            is a world-space altitude that the fog apply()
+//                            compares against `clipHeight` (the water-line);
+//                            its full xyzw feeds the shadow cascade matrices.
+//   worldView      @ 0x040 — object → view.   The VS emits this as the PS's
+//                            "worldPos" TEXCOORD1 input. Strictly speaking
+//                            view-space — the PS's `invView` transform
+//                            brings it back out into probe space.
+//   worldViewProj  @ 0x080 — object → clip.   Writes SV_POSITION.
 public struct VSPerDraw
 {
-    float4x4 viewProj;
     float4x4 world;
+    float4x4 worldView;
     float4x4 worldViewProj;
     float   effectTime;   float popcornScale;
     float   clipHeight;   float underWater;
@@ -178,17 +189,20 @@ public struct SDPSPerDraw
     ShaderLight lights[8];
 };
 
-// Scalar cascade count for the SD-on-HD shadow sampler (b1).
-public struct SDShadowCascadeCount
+// Scalar cascade count for the shadow sampler PS path (b1).
+// Shared between the HD (IBL) and SD-on-HD pipelines — both consume the
+// same cb1[0].x active-cascade count.
+public struct ShadowCascadeCount
 {
     float numCascades;  float3 _pad;
 };
 
-public ConstantBuffer<SDPSPerDraw>          sdPsCB2 : register(b2);
-public ConstantBuffer<SDShadowCascadeCount> sdPsCB1 : register(b1);
+public ConstantBuffer<SDPSPerDraw>        sdPsCB2 : register(b2);
+public ConstantBuffer<ShadowCascadeCount> sdPsCB1 : register(b1);
 
-// SD-on-HD shadow cascades use separate textures + comparison samplers so
-// each cascade can have its own resolution; PCF is done in sd_ps_shadow.
+// Shadow cascades at t10-12 / s10-12 are shared between the HD IBL path
+// and the SD-on-HD pipeline — both bind the same comparison-sampled
+// 2D shadow maps here and run the PCF helper in sd_ps_shadow.
 public Texture2D<float4>      sd_t_shadow0 : register(t10);
 public Texture2D<float4>      sd_t_shadow1 : register(t11);
 public Texture2D<float4>      sd_t_shadow2 : register(t12);
@@ -224,3 +238,72 @@ public struct SDClassicPSPerDraw
 
 public ConstantBuffer<SDHighspecVSPerDraw>  sdHighspecVsCB0 : register(b0);
 public ConstantBuffer<SDClassicPSPerDraw>   sdClassicPsCB0  : register(b0);
+
+// Per-draw constants for the water pixel shader (b2). Shares most of
+// its layout with `PSPerDraw` — fog, invView rotation, IBL probe params,
+// effect time, and the analytic light list are identical slot-for-slot
+// — but repurposes a few fields the HD path doesn't need:
+//   • `worldToClip` (cb2[11..14], aka HD's `projection`) is used as the
+//     full world-space → clip-space matrix by the SSR march.
+//   • `ambientClamp` (cb2[16].xyz) is an HDR ceiling on the emissive
+//     probe color (HD uses these 3 scalars as cloak / fresnel knobs).
+//   • `refractSoftness` / `litSoftness` (cb2[17].xy) parameterise the
+//     two depth-based shore ramps.
+//
+// `lights[8]` over-declares the last 16 bytes relative to what the
+// engine actually uploads (which stops at light[7].position+type), but
+// the water shader never reads that slot and D3D tolerates the extra.
+public struct WaterPSPerDraw
+{
+    float4  _pad0;                                 // cb2[0]
+
+    float   fogStart;        float  fogEnd;
+    float   fogDensity;      float  _p1;           // cb2[1]
+    float4  fogColor;                              // cb2[2]
+
+    float4x4 _padWorldView;                        // cb2[3..6] (unused by water)
+    float4x4 invView;                              // cb2[7..10]
+    float4x4 worldToClip;                          // cb2[11..14]
+    float4   viewport;                             // cb2[15]
+
+    // cb2[16]: HDR clamp applied to the emissive probe color.
+    float3   ambientClamp;   float _p16;           // cb2[16]
+
+    // cb2[17]: depth-based shore ramp distances.
+    float    refractSoftness;
+    float    litSoftness;    float2 _p17;          // cb2[17]
+
+    float4   _pad18;                               // cb2[18]
+
+    float    envFromMipEnd;  float  envToMipEnd;
+    float    envTransitionT; float  _p19;          // cb2[19]
+
+    float    effectTime;     float  _p20_y;
+    float    lightCount;     float  useNdf;        // cb2[20]
+
+    ShaderLight lights[8];                         // cb2[21..]
+};
+
+public ConstantBuffer<WaterPSPerDraw> waterPsCB2 : register(b2);
+
+// Water PS texture bindings. The water draw reuses HD slot numbers but
+// binds different resources there — the aliases below make the intent
+// explicit in the shader body. Slang only emits bindings that the
+// compiled entry actually uses, so these don't collide with the HD
+// `t_albedo` / `t_normal` / ... declarations above.
+//   t0 = previous-frame scene color (for refraction & SSR hits)
+//   t1 = previous-frame depth buffer, sampled as .x
+//   t2 = tiling water normal map (DXT5nm-style two-channel packing)
+//   t3 = emissive / lightmap probe (sampled at mip 16 ≈ average color)
+//
+//   s4 = scene-color sampler (note: paired with t0, not s0)
+//   s1/s2/s3 match their texture counterparts
+public Texture2D<float4> t_waterScene  : register(t0);
+public Texture2D<float4> t_waterDepth  : register(t1);
+public Texture2D<float4> t_waterNormal : register(t2);
+public Texture2D<float4> t_waterProbe  : register(t3);
+
+public SamplerState s_waterScene  : register(s4);
+public SamplerState s_waterDepth  : register(s1);
+public SamplerState s_waterNormal : register(s2);
+public SamplerState s_waterProbe  : register(s3);

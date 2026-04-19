@@ -9,6 +9,9 @@
 //   TAlpha            — alpha-test policy.
 //   TMat              — material policy (standard vs. multi-layer).
 //   HAS_IBL           — route to the full IBL / Cook-Torrance body.
+//   HAS_EXTRA_VERTS   — VS passed shadowClip0-2 cascade coords; the IBL
+//                        body samples the three shadow cascades and
+//                        attenuates the main directional light.
 //   IS_DEPTH_PREPASS  — depth-only pass (no color).
 //   IS_MRT            — also write the deferred-G-buffer targets.
 //   HAS_DEBUG_VIS     — debug visualisation enabled.
@@ -26,6 +29,7 @@ public PSOutput<IS_MRT> ps_main<
     TAlpha   : IAlphaTest,
     TMat     : IMaterialLayer,
     let HAS_IBL            : bool,
+    let HAS_EXTRA_VERTS    : bool,
     let IS_DEPTH_PREPASS   : bool,
     let IS_MRT             : bool,
     let HAS_DEBUG_VIS      : bool
@@ -60,7 +64,7 @@ public PSOutput<IS_MRT> ps_main<
     // Dispatch to the appropriate lit body.
     float4 result;
     if (HAS_IBL)
-        result = psIBLBody<TMat, HAS_DEBUG_VIS>(input, isFrontFace);
+        result = psIBLBody<TMat, HAS_EXTRA_VERTS, HAS_DEBUG_VIS>(input, isFrontFace);
     else if (TMat.hasMultiLayer)
         result = psMultiLayerBody<HAS_DEBUG_VIS>(input, isFrontFace);
     else

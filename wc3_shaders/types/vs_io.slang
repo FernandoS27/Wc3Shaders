@@ -56,3 +56,33 @@ public struct SDVSOutput
     float4 texCoord    : TEXCOORD0;
     float3 worldPos    : TEXCOORD1;
 };
+
+// Water vertex stream (subset of the HD stream — no tangent, no UV1,
+// no skinning). Kept separate from VSInput so the water VS emits a
+// 4-attribute input signature matching the engine's water vertex
+// buffer rather than the 8-attribute HD one.
+public struct WaterVSInput
+{
+    float3 position    : ATTR0;
+    float3 normal      : ATTR1;
+    float4 vertColor   : ATTR2;
+    float2 uv          : ATTR3;
+};
+
+// Water VS → PS payload. Differs from VSOutput in two ways:
+//   • no TEXCOORD2 slot — the water PS takes its geometry normal on
+//     TEXCOORD3 to free TEXCOORD2 for an engine-wide reserved slot.
+//   • TEXCOORD4 carries a fixed "up" axis (world Y column), which the
+//     water PS uses as the TBN tangent instead of a per-vertex tangent.
+// Member types are trimmed to the exact components the PS reads, so
+// the compiled VS declares `dcl_output oN.xy/xyz/xyzw` accordingly
+// (and doesn't emit dead writes to unused lanes).
+public struct WaterVSOutput
+{
+    float4 position    : SV_Position;
+    float4 color       : COLOR0;
+    float2 texCoord    : TEXCOORD0;
+    float3 worldPos    : TEXCOORD1;
+    float3 normalWS    : TEXCOORD3;
+    float4 upAxisWS    : TEXCOORD4;
+};

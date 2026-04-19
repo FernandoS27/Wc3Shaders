@@ -32,15 +32,17 @@ public VSOutput vs_main<
         input.weights, input.boneIndices, vsCB3,
         skinnedPos, skinnedNormal, skinnedTangent);
 
-    // Step 2: world-space position and clip-space position. We compute
-    // clip directly from object space via worldViewProj to avoid
-    // losing precision to the intermediate world pos.
-    output.worldPos.xyz = transformByWorld(skinnedPos, vsCB2.world);
-    output.position = transformClipPos(skinnedPos, vsCB2.worldViewProj);
+    // Step 2: view-space position (emitted as the PS's "worldPos" input
+    // — the PS transforms it back through `invView` as needed) + clip
+    // position. Clip comes directly from object space via worldViewProj
+    // to avoid losing precision to the intermediate pos.
+    output.worldPos.xyz = transformByWorldView(skinnedPos, vsCB2.worldView);
+    output.position     = transformClipPos(skinnedPos, vsCB2.worldViewProj);
 
-    // Step 3: world-space normal (renormalised — HD PS assumes it's
-    // unit-length before any BRDF work).
-    output.normalWS.xyz = transformNormal(skinnedNormal, vsCB2.world);
+    // Step 3: view-space normal (renormalised — HD PS assumes it's
+    // unit-length before any BRDF work). Lives in the same space as
+    // `worldPos` above; the PS co-rotates both with `invView`.
+    output.normalWS.xyz = transformNormal(skinnedNormal, vsCB2.worldView);
     output.normalWS.w = 0;
 
     // Tangent only when the vertex format advertises one; `tangent.w`
@@ -48,7 +50,7 @@ public VSOutput vs_main<
     // pixel shader (see tangentToWorld).
     if (TVF.hasTangent)
     {
-        output.tangentWS.xyz = transformNormal(skinnedTangent, vsCB2.world);
+        output.tangentWS.xyz = transformNormal(skinnedTangent, vsCB2.worldView);
         output.tangentWS.w = input.tangent.w;
     }
     else
@@ -58,21 +60,21 @@ public VSOutput vs_main<
 
     if (HAS_SHADOWS)
     {
-        // When shadows are needed, compute the view-space position
-        // once and reuse it for both fog depth and the three cascade
-        // clip-space projections.
-        float4 viewPos = computeViewPos(skinnedPos, vsCB2.viewProj);
-        output.worldPos.w = computeFogDepth(viewPos.z, vsCB2.clipHeight, vsCB2.underWater);
+        // When shadows are needed, compute the world-space position
+        // once and reuse it for both fog altitude and the three cascade
+        // clip-space projections (the cascade matrices take world pos).
+        float4 worldPos4 = computeWorldPos4(skinnedPos, vsCB2.world);
+        output.worldPos.w = computeFogDepth(worldPos4.z, vsCB2.clipHeight, vsCB2.underWater);
 
-        computeShadowCascades(viewPos, vsCB1,
+        computeShadowCascades(worldPos4, vsCB1,
             output.shadowClip0, output.shadowClip1, output.shadowClip2);
     }
     else
     {
-        // Non-shadow path skips the full view transform and only reads
-        // the Z row of viewProj — cheaper by 3 multiplies + an adder.
-        float viewZ = computeScalarViewZ(skinnedPos, vsCB2.viewProj);
-        output.worldPos.w = computeFogDepth(viewZ, vsCB2.clipHeight, vsCB2.underWater);
+        // Non-shadow path skips the full world transform and only reads
+        // the Z row of `world` — cheaper by 3 multiplies + an adder.
+        float worldZ = computeScalarWorldZ(skinnedPos, vsCB2.world);
+        output.worldPos.w = computeFogDepth(worldZ, vsCB2.clipHeight, vsCB2.underWater);
 
         output.shadowClip0 = float4(0, 0, 0, 0);
         output.shadowClip1 = float4(0, 0, 0, 0);
