@@ -89,13 +89,20 @@ public struct BonePalette
 };
 
 // Debug visualisation controls (b3 in PS).
-// `enabledShaders` is a bitfield toggling various debug overrides;
+// `enabledShaders` is a bitfield toggling various debug overrides:
+//   bit 0 — replace albedo.rgb with overrideAlbedo.
+//   bit 1 — replace the t2 control map with overrideOrm (used by crystal):
+//           scalar form (standard / ML) reads .x as a refractMask override,
+//           vector form (IBL paths) reads .xyz as a full ORM override.
 // `debugMode` selects one of the visualisation paths in debugVisualize().
+// The `overrideOrm` slot is unused by the HD pipeline and exists here so
+// the crystal pipeline shares the same b3 layout.
 public struct DebugVisCB
 {
-    uint  enabledShaders;  float debugMode;
+    uint  enabledShaders;  float  debugMode;
     float2 _p0;
-    float3 overrideAlbedo; float _p1;
+    float3 overrideAlbedo; float  _p1;
+    float3 overrideOrm;    float  _p2;
 };
 
 public ConstantBuffer<PSPerDraw>      psCB2 : register(b2);

@@ -30,6 +30,7 @@
 //
 //   hd_ps        — HD pipeline pixel shader (PBR / IBL).
 //   hd_vs        — HD pipeline vertex shader.
+//   crystal_ps   — HD refractive / transparent variant (gem / glass props).
 //   sd_on_hd_ps  — SD assets rendered through the HD pipeline (PS).
 //   sd_on_hd_vs  — SD assets rendered through the HD pipeline (VS).
 //   sd_highspec_vs — SD pipeline per-vertex-lit VS.
@@ -59,12 +60,18 @@ __include "interfaces/texture_stage";
 __include "effects/cloak";
 __include "effects/fresnel_overlay";
 __include "effects/multi_layer";
+__include "effects/crystal_refract";
 
 // HD pixel-shader bodies (shared among ps_main permutations).
 __include "ps/ps_depth_prepass";
 __include "ps/ps_ibl";
 __include "ps/ps_standard";
 __include "ps/ps_post";
+
+// Crystal pixel-shader bodies (refractive variant of the HD pipeline).
+__include "ps/crystal_ps_depth_prepass";
+__include "ps/crystal_ps_ibl";
+__include "ps/crystal_ps_standard";
 
 // SD-on-HD pixel-shader bodies.
 __include "ps/sd_ps_depth_prepass";
@@ -83,6 +90,7 @@ __include "vs/sd_vs_lighting";
 // Entry points.
 __include "hd_ps";
 __include "hd_vs";
+__include "crystal_ps";
 __include "sd_on_hd_ps";
 __include "sd_on_hd_vs";
 __include "sd_highspec_vs";

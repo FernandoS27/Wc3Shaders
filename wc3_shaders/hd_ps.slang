@@ -45,15 +45,14 @@ public PSOutput<IS_MRT> ps_main<
     {
         // Depth-only path: either run the alpha-tested prepass or the
         // cheap stub, then return a zero color (only depth is needed).
+        // Both branches already discard backfaces / failed alpha tests
+        // themselves; do NOT follow with an unconditional `discard` —
+        // that would kill every surviving fragment and suppress the
+        // rasterizer's depth write, defeating the whole prepass.
         if (!TAlpha.enabled)
-        {
             depthPrepassStub(input);
-            discard;
-        }
         else
-        {
             depthPrepassBody<TAlpha, TMat>(input, isFrontFace);
-        }
         output.color = float4(0, 0, 0, 0);
         return output;
     }
@@ -128,7 +127,14 @@ public PSOutput<IS_MRT> ps_main<
         wn = normalize(wn);
         wn = orientNormal(wn, isFrontFace);
 
-        result = debugVisualize(result, input, wn, normalLen);
+        // Effective albedo for DEBUG mode 1: the centre sample after
+        // the bit-0 override has been applied, matching what the lit
+        // body shaded with.
+        float3 effectiveAlbedo = t_albedo.Sample(s_albedo, input.uv.xy).xyz;
+        if ((asuint(psCB3.enabledShaders) & 1) != 0)
+            effectiveAlbedo = psCB3.overrideAlbedo;
+
+        result = debugVisualize(result, input, wn, normalLen, effectiveAlbedo);
         if (!TFog.hasFog)
             result.w = psCB2.inverseSoftness * result.w;
     }

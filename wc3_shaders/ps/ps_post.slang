@@ -93,14 +93,22 @@ public float queryTextureLOD(Texture2D<float4> tex, SamplerState samp, float2 uv
 }
 
 // Debug visualisation router. `psCB3.debugMode` picks which view to
-// emit; mode 0 is the normal-game visualisation path (still applies
-// the color matrix), mode 1 shows raw albedo, mode 2 visualises the
-// world normal (mixed with its pre-normalised length so artists can
-// spot denormalised tangents), mode 3 shows the sampled mip level as a
-// stepped palette, and mode 4 shows the active light count.
-// Modes 5..8 are reserved in the original engine and output black.
+// emit; mode 0 is "normal output under DEBUG" (the lit colour without
+// the post colour-matrix — the callers applies the matrix themselves
+// outside DEBUG_VIS), mode 1 shows the *effective* albedo (post-
+// refraction and post-override, as computed by the caller), mode 2
+// visualises the world normal (mixed with its pre-normalised length so
+// artists can spot denormalised tangents), mode 3 shows the sampled
+// mip level as a stepped palette, and mode 4 shows the active light
+// count. Modes 5..8 are reserved in the original engine and output
+// black; modes ≥ 9 fall through to mode 0.
+//
+// `effectiveAlbedo` is the albedo the lit body actually shaded with —
+// e.g. for crystal this is the refracted+override-swapped rgb. Callers
+// that do not apply any override or refraction can simply pass
+// `t_albedo.Sample(...).xyz`.
 public float4 debugVisualize(float4 color, PSInput input,
-    float3 worldNormal, float normalLen)
+    float3 worldNormal, float normalLen, float3 effectiveAlbedo)
 {
     float lodVal = queryTextureLOD(t_albedo, s_albedo, input.uv.xy);
     float lodFrac = frac(lodVal);
@@ -123,13 +131,21 @@ public float4 debugVisualize(float4 color, PSInput input,
 
     if (dbgMode == 0)
     {
-        // Normal game output (still needs the post color-matrix).
-        return float4(applyColorMatrix(color.xyz), color.w);
+        // "Normal game output" in DEBUG_VIS mode — outputs the lit colour
+        // without the post colour-matrix. Matches the original shaders,
+        // which intentionally bypass the matrix under DEBUG_VIS so the
+        // tool view shows unmodified material output; the non-debug
+        // entry applies the matrix itself before calling this helper.
+        return color;
     }
     else if (dbgMode == 1)
     {
-        // Raw albedo (no lighting).
-        return float4(t_albedo.Sample(s_albedo, input.uv.xy).xyz, color.w);
+        // "Effective" albedo: what the lit body actually used. For HD
+        // that is the centre sample with the bit-0 override swapped in;
+        // for crystal that is the centre↔offset refracted blend with
+        // the bit-0 override swapped in. Caller passes it through so we
+        // match the original shader's r0.xyz output exactly.
+        return float4(effectiveAlbedo, color.w);
     }
     else if (dbgMode == 2)
     {
@@ -167,11 +183,11 @@ public float4 debugVisualize(float4 color, PSInput input,
     }
     else
     {
-        // Reserved debug slots emit black; everything else falls
-        // through to the normal post-processed output.
+        // Reserved debug slots 5..8 emit black; anything else (mode ≥ 9
+        // — undefined in the engine) falls through to the raw lit colour
+        // just like mode 0, matching the original decompiled switch.
         if (dbgMode >= 5 && dbgMode <= 8)
             return float4(0, 0, 0, color.w);
-
-        return float4(applyColorMatrix(color.xyz), color.w);
+        return color;
     }
 }

@@ -11,7 +11,7 @@ This is the inverse of extract_bls.py. For each shader family we:
      chunk layout exactly.
   4. Repack into the BLS wire format and write out the file.
 
-The six shader-family -> Slang-output mapping lives in FAMILY_MAP /
+The seven shader-family -> Slang-output mapping lives in FAMILY_MAP /
 METAL_FAMILY_MAP below. Shipped BLS files live under
 war3.w3mod/shaders/{ps,vs,mtlfs,mtlvs}/*.bls. Slang outputs live under:
   <repo>/slang_out/d3d11/<family>/perm_NNN.dxbc      (DX, any platform)
@@ -56,6 +56,7 @@ BLS_METAL_STAGE = 1             # DX perms carry a real stage id; Metal perms
 # --templates so we can find the template BLS automatically.
 FAMILY_MAP = {
     'hd_ps':          ('ps', 'hd.bls',          512),
+    'crystal_ps':     ('ps', 'crystal.bls',     512),
     'sd_classic_ps':  ('ps', 'sd.bls',          200),
     'sd_on_hd_ps':    ('ps', 'sd_on_hd.bls',    384),
     'hd_vs':          ('vs', 'hd.bls',          144),
@@ -63,11 +64,12 @@ FAMILY_MAP = {
     'sd_on_hd_vs':    ('vs', 'sd_on_hd.bls',    144),
 }
 
-# Same six families, re-pointed at the Metal BLS bundles under mtlfs/ and
+# Same seven families, re-pointed at the Metal BLS bundles under mtlfs/ and
 # mtlvs/. Perm counts match the DX side — DX and Metal share the same
 # Slang-level permutation enumeration.
 METAL_FAMILY_MAP = {
     'hd_ps':          ('mtlfs', 'hd.bls',          512),
+    'crystal_ps':     ('mtlfs', 'crystal.bls',     512),
     'sd_classic_ps':  ('mtlfs', 'sd.bls',          200),
     'sd_on_hd_ps':    ('mtlfs', 'sd_on_hd.bls',    384),
     'hd_vs':          ('mtlvs', 'hd.bls',          144),
@@ -493,7 +495,7 @@ def main():
                          'mtlfs/*.bls, mtlvs/*.bls (used when rebuilding Metal BLS)')
     ap.add_argument('--output', required=True, help='output directory for rebuilt BLS')
     ap.add_argument('--family', action='append', choices=list(FAMILY_MAP),
-                    help='limit to specific family (default: all 6)')
+                    help='limit to specific family (default: all 7)')
     ap.add_argument('--strip', action='store_true',
                     help='strip RDEF/STAT chunks from DXBC (match shipped chunk layout) '
                          'and recompute the DXBC hash')

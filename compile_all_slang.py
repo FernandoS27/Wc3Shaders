@@ -5,7 +5,8 @@ Runs independently of the current working directory — paths resolve
 relative to this script's location.
 
     --target {d3d11,d3d12,vulkan,opengl,metal,webgpu,all}  (default: d3d11)
-    --family {hd_vs,hd_ps,sd_on_hd_vs,sd_on_hd_ps,sd_highspec_vs,sd_classic_ps,all}
+    --family {hd_vs,hd_ps,crystal_ps,sd_on_hd_vs,sd_on_hd_ps,
+              sd_highspec_vs,sd_classic_ps,all}
     --slangc PATH   explicit slangc.exe override
 """
 
@@ -24,7 +25,7 @@ SHADER = REPO_ROOT / "wc3_shaders" / "wc3_shaders.slang"
 OUT_BASE = REPO_ROOT / "slang_out"
 
 FAMILIES = (
-    "hd_vs", "hd_ps",
+    "hd_vs", "hd_ps", "crystal_ps",
     "sd_on_hd_vs", "sd_on_hd_ps",
     "sd_highspec_vs", "sd_classic_ps",
 )
@@ -181,33 +182,57 @@ def map_hd_vs(idx: int) -> PermSpec:
     )
 
 
-def map_hd_ps(idx: int) -> PermSpec:
-    mrt  = bool(idx & 1)
-    dp   = bool(idx & 2)
-    ibl  = bool(idx & 8)
-    fogL = bool(idx & 16)
-    fogE = bool(idx & 32)
-    at   = bool(idx & 64)
-    ml   = bool(idx & 128)
-    dbg  = bool(idx & 256)
+def _hd_ps_bits(idx: int):
+    """Shared 9-bit feature encoding for hd_ps and crystal_ps (bit 2 /
+    EXTRA_VERTS is unused on both entries — it only affects the VS side
+    of the HD pipeline)."""
+    return {
+        "mrt":  bool(idx & 1),
+        "dp":   bool(idx & 2),
+        "ibl":  bool(idx & 8),
+        "fogL": bool(idx & 16),
+        "fogE": bool(idx & 32),
+        "at":   bool(idx & 64),
+        "ml":   bool(idx & 128),
+        "dbg":  bool(idx & 256),
+    }
 
-    if fogL and fogE:
+
+def _hd_ps_types(b):
+    if b["fogL"] and b["fogE"]:
         fog = "FogExp2"
-    elif fogL:
+    elif b["fogL"]:
         fog = "FogLinear"
-    elif fogE:
+    elif b["fogE"]:
         fog = "FogExponential"
     else:
         fog = "FogNone"
-    alpha = "AlphaTestOn" if at else "AlphaTestOff"
-    mat   = "MultiLayerMaterial" if ml else "StandardMaterial"
-    iblS  = "true" if ibl else "false"
-    dpS   = "true" if dp else "false"
-    mrtS  = "true" if mrt else "false"
-    dbgS  = "true" if dbg else "false"
+    alpha = "AlphaTestOn" if b["at"] else "AlphaTestOff"
+    mat   = "MultiLayerMaterial" if b["ml"] else "StandardMaterial"
+    iblS  = "true" if b["ibl"] else "false"
+    dpS   = "true" if b["dp"] else "false"
+    mrtS  = "true" if b["mrt"] else "false"
+    dbgS  = "true" if b["dbg"] else "false"
+    return fog, alpha, mat, iblS, dpS, mrtS, dbgS
 
+
+def map_hd_ps(idx: int) -> PermSpec:
+    b = _hd_ps_bits(idx)
+    fog, alpha, mat, iblS, dpS, mrtS, dbgS = _hd_ps_types(b)
     return PermSpec(
         entry="ps_main",
+        types=[fog, alpha, mat, iblS, dpS, mrtS, dbgS],
+        label=f"{fog}+{alpha}+{mat}+IBL={iblS}+DP={dpS}+MRT={mrtS}+DBG={dbgS}",
+    )
+
+
+def map_crystal_ps(idx: int) -> PermSpec:
+    # Crystal shares hd_ps's 9-bit encoding one-for-one, so the bit
+    # unpack / type selection is identical — only the entry name differs.
+    b = _hd_ps_bits(idx)
+    fog, alpha, mat, iblS, dpS, mrtS, dbgS = _hd_ps_types(b)
+    return PermSpec(
+        entry="crystal_ps_main",
         types=[fog, alpha, mat, iblS, dpS, mrtS, dbgS],
         label=f"{fog}+{alpha}+{mat}+IBL={iblS}+DP={dpS}+MRT={mrtS}+DBG={dbgS}",
     )
@@ -330,6 +355,7 @@ def map_sd_classic_ps(idx: int) -> PermSpec:
 SWEEPS = [
     ("hd_vs",          144, map_hd_vs,          "vs"),
     ("hd_ps",          512, map_hd_ps,          "ps"),
+    ("crystal_ps",     512, map_crystal_ps,     "ps"),
     ("sd_on_hd_vs",    144, map_sd_on_hd_vs,    "vs"),
     ("sd_on_hd_ps",    384, map_sd_on_hd_ps,    "ps"),
     ("sd_highspec_vs", 162, map_sd_highspec_vs, "vs"),
