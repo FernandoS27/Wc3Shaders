@@ -1,12 +1,13 @@
-"""Compile all permutations of all 6 shader entry points from the unified
+"""Compile all permutations of every shader entry point from the unified
 wc3_shaders Slang module, to one of several graphics-API targets.
 
 Runs independently of the current working directory — paths resolve
 relative to this script's location.
 
     --target {d3d11,d3d12,vulkan,opengl,metal,webgpu,all}  (default: d3d11)
-    --family {hd_vs,hd_ps,crystal_ps,sd_on_hd_vs,sd_on_hd_ps,
-              sd_highspec_vs,sd_classic_ps,all}
+    --family {hd_vs,hd_ps,toon_hd_vs,toon_hd_ps,crystal_ps,
+              sd_on_hd_vs,sd_on_hd_ps,sd_highspec_vs,sd_classic_ps,
+              water_vs,water_ps,all}
     --slangc PATH   explicit slangc.exe override
 """
 
@@ -26,6 +27,7 @@ OUT_BASE = REPO_ROOT / "slang_out"
 
 FAMILIES = (
     "hd_vs", "hd_ps", "crystal_ps",
+    "toon_hd_vs", "toon_hd_ps",
     "sd_on_hd_vs", "sd_on_hd_ps",
     "sd_highspec_vs", "sd_classic_ps",
     "water_vs", "water_ps",
@@ -230,6 +232,20 @@ def map_hd_ps(idx: int) -> PermSpec:
     )
 
 
+def map_toon_hd_vs(idx: int) -> PermSpec:
+    # Toon-HD shares the HD vertex-format encoding 1:1 — same 144 perms,
+    # same specialisation types, different entry point.
+    spec = map_hd_vs(idx)
+    return PermSpec(entry="toon_vs_main", types=spec.types, label=spec.label)
+
+
+def map_toon_hd_ps(idx: int) -> PermSpec:
+    # Toon-HD shares the HD pixel-shader 9-bit feature encoding 1:1 —
+    # same 512 perms, same specialisation types, different entry point.
+    spec = map_hd_ps(idx)
+    return PermSpec(entry="toon_ps_main", types=spec.types, label=spec.label)
+
+
 def map_crystal_ps(idx: int) -> PermSpec:
     # Crystal shares hd_ps's 9-bit encoding for most features. Bit 2 /
     # EXTRA_VERTS is unused on crystal's PS signature (crystal doesn't
@@ -382,6 +398,8 @@ def map_sd_classic_ps(idx: int) -> PermSpec:
 SWEEPS = [
     ("hd_vs",          144, map_hd_vs,          "vs"),
     ("hd_ps",          512, map_hd_ps,          "ps"),
+    ("toon_hd_vs",     144, map_toon_hd_vs,     "vs"),
+    ("toon_hd_ps",     512, map_toon_hd_ps,     "ps"),
     ("crystal_ps",     512, map_crystal_ps,     "ps"),
     ("sd_on_hd_vs",    144, map_sd_on_hd_vs,    "vs"),
     ("sd_on_hd_ps",    384, map_sd_on_hd_ps,    "ps"),
