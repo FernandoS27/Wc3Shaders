@@ -16,7 +16,7 @@ public struct PSInput
     float4 vertColor    : COLOR0;
     float4 uv           : TEXCOORD0;
     float4 worldPos     : TEXCOORD1;
-    float4 normalWS     : TEXCOORD2;
+    float3 normalWS     : TEXCOORD2;
     float4 tangentWS    : TEXCOORD3;
     float4 shadowClip0  : TEXCOORD4;
     float4 shadowClip1  : TEXCOORD5;
@@ -26,14 +26,18 @@ public struct PSInput
 // HD pixel shader output. When the MRT path is disabled the specular and
 // normal targets are compiled out entirely thanks to `Conditional`, so
 // the shader binds a single render target just like the non-MRT builds.
+// When the depth-prepass path is enabled, `color` itself is compiled out
+// — the prepass pass binds no color render targets and the shipped game
+// shader has no SV_Target entries in that signature; emitting one would
+// force a dummy color write against a non-existent RTV.
 //   color    = final lit + fog + color-matrixed RGBA
 //   specular = view-space depth (x) for screen-space resolve effects
 //   normal   = packed world-space normal (xyz) + pre-fog alpha (w)
-public struct PSOutput<let IS_MRT : bool>
+public struct PSOutput<let IS_MRT : bool, let HAS_COLOR : bool>
 {
-    float4 color : SV_Target0;
-    Conditional<float4, IS_MRT> specular : SV_Target1;
-    Conditional<float4, IS_MRT> normal   : SV_Target2;
+    Conditional<float4, HAS_COLOR> color    : SV_Target0;
+    Conditional<float4, IS_MRT>    specular : SV_Target1;
+    Conditional<float4, IS_MRT>    normal   : SV_Target2;
 };
 
 // SD classic pipeline pixel shader input. No normals or tangents because

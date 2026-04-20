@@ -98,6 +98,252 @@ def dxbc_chunks(dxbc):
         yield fourcc, off, size
 
 
+def fix_dxbc_signatures(dxbc):
+    """Patch ISGN/OSGN semantic indices emitted by slangc.
+
+    The Slang compiler emits HLSL semantics by concatenating the source
+    semantic name (already including its numeric suffix, e.g. ``TEXCOORD1``)
+    with an additional ``0`` for every field, producing ``TEXCOORD10``.
+    When fxc parses that HLSL it strips the trailing digits into the SGN
+    `sem_idx` field, so a source semantic of ``TEXCOORD1`` ends up stored
+    as ``name="TEXCOORD", sem_idx=10`` in the DXBC — a 10× shift.
+
+    The shipped shaders use semantic indices 0..7, so every bugged index
+    is a multiple of 10 and the original is recoverable by a simple
+    ``sem_idx //= 10``. The SGN string table and entry sizes don't change,
+    so this edit is in-place (just a single u32 per entry).
+
+    Additionally we uppercase system-value names (``SV_Position`` →
+    ``SV_POSITION`` etc.) to match the casing in the shipped DXBC blobs;
+    D3D resolves SV_* by `sys_val` tag so this is safe but makes the
+    rebuilt signature byte-identical to the shipped one aside from the
+    program body.
+    """
+    if dxbc[:4] != b'DXBC':
+        return dxbc
+    out = bytearray(dxbc)
+    for fourcc, off, _size in list(dxbc_chunks(dxbc)):
+        if fourcc not in (b'ISGN', b'OSGN', b'PCSG'):
+            continue
+        body_start = off + 8
+        count, = struct.unpack_from('<I', out, body_start)
+        for i in range(count):
+            e_off = body_start + 8 + i * 24
+            sem_idx, = struct.unpack_from('<I', out, e_off + 4)
+            if sem_idx and sem_idx % 10 == 0:
+                struct.pack_into('<I', out, e_off + 4, sem_idx // 10)
+            name_off, = struct.unpack_from('<I', out, e_off)
+            s = body_start + name_off
+            end = out.find(b'\x00', s)
+            if end == -1:
+                continue
+            name = bytes(out[s:end])
+            if name.upper().startswith(b'SV_'):
+                out[s:end] = name.upper()
+    return bytes(out)
+
+
+def _shex_declared_input_regs(shex_body):
+    """Scan a SHEX program body and return the set of input register
+    indices that are actually declared (``dcl_input vN`` and variants).
+
+    Uses the SM5 token stream layout: every instruction is ``opcode ||
+    operand || ...`` and ``opcode.bits[24..30]`` is the instruction
+    length in dwords. The DCL_INPUT* opcodes (0x5F / 0x60 / 0x61 / 0x62
+    / 0x63 / 0x64) all encode the register index as the immediate32
+    following the operand token, at ``cursor + 8``.
+    """
+    INPUT_OPCODES = {0x5F, 0x60, 0x61, 0x62, 0x63, 0x64}
+    used = set()
+    cursor = 8   # skip program version + length header
+    while cursor < len(shex_body):
+        tok, = struct.unpack_from('<I', shex_body, cursor)
+        op = tok & 0x7FF
+        length = (tok >> 24) & 0x7F
+        if length == 0:
+            # Extended-length (custom-data block): next u32 is the length in dwords.
+            length, = struct.unpack_from('<I', shex_body, cursor + 4)
+            cursor += length * 4
+            continue
+        if op in INPUT_OPCODES:
+            reg, = struct.unpack_from('<I', shex_body, cursor + 8)
+            used.add(reg)
+        cursor += length * 4
+    return used
+
+
+def _rewrite_sgn_body(body, keep_regs, remap=None):
+    """Rewrite an ISGN/OSGN/PCSG body, keeping only entries whose register
+    index is in ``keep_regs`` (or any entry with a non-zero system-value
+    tag — SV_Position etc. must stay in the signature even when the
+    program body never consumes them, because D3D validates stage-to-stage
+    linkage against those entries). Optionally applies a ``remap`` of
+    old→new register numbers so the kept entries can be renumbered to
+    be contiguous; the SHEX body must be renumbered with the same map.
+    Preserves entry order, dedupes names in the string table, and pads
+    the output to a 4-byte boundary."""
+    count, _hdr_dw = struct.unpack_from('<II', body, 0)
+    kept = []
+    for i in range(count):
+        off = 8 + i * 24
+        name_off, sem_idx, sys_val, comp_ty, reg, mask_rw = \
+            struct.unpack_from('<IIIIII', body, off)
+        if reg not in keep_regs and sys_val == 0:
+            continue
+        if remap is not None and reg in remap:
+            reg = remap[reg]
+        end = body.find(b'\x00', name_off)
+        name = bytes(body[name_off:end])
+        kept.append((name, sem_idx, sys_val, comp_ty, reg, mask_rw))
+
+    new_count = len(kept)
+    entries_end = 8 + new_count * 24
+    str_table = bytearray()
+    str_offs = {}
+    for name, *_ in kept:
+        if name in str_offs:
+            continue
+        str_offs[name] = entries_end + len(str_table)
+        str_table += name + b'\x00'
+
+    out = bytearray()
+    out += struct.pack('<II', new_count, 8)
+    for name, sem_idx, sys_val, comp_ty, reg, mask_rw in kept:
+        out += struct.pack('<IIIIII',
+                           str_offs[name], sem_idx, sys_val,
+                           comp_ty, reg, mask_rw)
+    out += str_table
+    while len(out) % 4:
+        out.append(0)
+    return bytes(out)
+
+
+def _renumber_shex_input_regs(shex_body, remap):
+    """Rewrite SHEX input-file (v<N>) register immediates according to
+    ``remap`` (dict old_reg → new_reg).
+
+    SM5 operand tokens encode the operand file type at bits 12..19, index
+    dimension at bits 20..21, and the representation of index 0 at bits
+    22..24. For input operands indexed 1D via a u32 immediate, those
+    three fields form the discriminating 13-bit pattern ``0x101000``
+    (type=INPUT=1, dim=1D, rep0=IMMEDIATE32=0). Bits 4..11 carry the
+    per-reference mask/swizzle, which differ between ``dcl_input_ps``
+    sites (mask mode) and body reads (swizzle mode) but don't affect
+    that pattern.
+
+    The immediately-following u32 is the register number we remap.
+    ``dcl_input_ps_sgv`` instructions have the same operand shape; their
+    trailing system-value tag is just another u32 that we leave alone.
+
+    Scanning is token-by-token; when we identify an input operand at
+    position N we advance to N+2 so the immediate can't double-match as
+    another operand.
+    """
+    OP_PATTERN_MASK = 0x00FFF000   # bits 12..23 (file + dim + rep0 low)
+    OP_PATTERN_VAL  = 0x00101000   # INPUT (1) | 1D dim (bit 20)
+    buf = bytearray(shex_body)
+    i = 8
+    while i + 8 <= len(buf):
+        tok, = struct.unpack_from('<I', buf, i)
+        if (tok & OP_PATTERN_MASK) == OP_PATTERN_VAL and (tok & 0x80000000) == 0:
+            reg, = struct.unpack_from('<I', buf, i + 4)
+            if reg in remap and remap[reg] != reg:
+                struct.pack_into('<I', buf, i + 4, remap[reg])
+            i += 8
+            continue
+        i += 4
+    return bytes(buf)
+
+
+def strip_unused_input_signature(dxbc):
+    """Remove ISGN entries whose register isn't actually declared in the
+    shader's SHEX program, then renumber the remaining input registers
+    (both ISGN entries and in-body references) so they stay contiguous
+    from 0.
+
+    Background: slangc's HLSL emits the full input struct even when the
+    specialised entry point reads only a subset. fxc then dead-strips
+    the unused ``dcl_input`` tokens in SHEX but leaves the corresponding
+    ISGN entries in place and keeps the original v<N> register numbers
+    for the kept inputs — so e.g. the HD pixel shader's SV_IsFrontFace
+    ends up on ``v9`` while r6..r8 are gaps. The shipped game shader
+    has these registers packed contiguously (SV_IsFrontFace at ``v6``
+    when TEXCOORD4..6 aren't declared) and the engine rejects the
+    non-contiguous version.
+    """
+    if dxbc[:4] != b'DXBC':
+        return dxbc
+    chunks = list(dxbc_chunks(dxbc))
+    if not any(fc == b'SHEX' for fc, _, _ in chunks):
+        return dxbc
+
+    shex_off = next(off for fc, off, _ in chunks if fc == b'SHEX')
+    shex_sz, = struct.unpack_from('<I', dxbc, shex_off + 4)
+    shex_body = dxbc[shex_off + 8:shex_off + 8 + shex_sz]
+    used_in = _shex_declared_input_regs(shex_body)
+
+    # Build the old→new register remap. We keep relative ordering (sorted
+    # by original register index) so the operand swizzles emitted by fxc
+    # don't have to shuffle. Also include sys_val-only ISGN entries whose
+    # register lives in the SHEX even without an explicit dcl_input —
+    # otherwise the ISGN→SHEX linkage goes stale after renumber.
+    isgn_regs = set()
+    for fc, off, size in chunks:
+        if fc != b'ISGN':
+            continue
+        body = dxbc[off + 8:off + 8 + size]
+        cnt, = struct.unpack_from('<I', body, 0)
+        for k in range(cnt):
+            eo = 8 + k * 24
+            _, _, sys_val, _, reg, _ = struct.unpack_from('<IIIIII', body, eo)
+            if reg in used_in or sys_val != 0:
+                isgn_regs.add(reg)
+    keep_regs = sorted(isgn_regs)
+    remap = {old: new for new, old in enumerate(keep_regs)}
+
+    rebuilt = []
+    changed = False
+    for fc, off, size in chunks:
+        raw = dxbc[off:off + 8 + size]
+        if fc == b'ISGN':
+            new_body = _rewrite_sgn_body(raw[8:], used_in, remap=remap)
+            if len(new_body) != size or new_body != raw[8:]:
+                raw = fc + struct.pack('<I', len(new_body)) + new_body
+                changed = True
+        elif fc == b'SHEX':
+            new_body = _renumber_shex_input_regs(raw[8:], remap)
+            if new_body != raw[8:]:
+                raw = fc + struct.pack('<I', len(new_body)) + new_body
+                changed = True
+        rebuilt.append(raw)
+
+    if not changed:
+        return dxbc
+
+    cnt = len(rebuilt)
+    header_size = 32 + cnt * 4
+    body = bytearray()
+    offsets = []
+    cursor = header_size
+    for raw in rebuilt:
+        offsets.append(cursor)
+        body += raw
+        cursor += len(raw)
+    total = header_size + len(body)
+
+    out = bytearray(total)
+    out[0:4] = b'DXBC'
+    out[4:20] = b'\x00' * 16
+    out[20:24] = struct.pack('<I', 1)
+    out[24:28] = struct.pack('<I', total)
+    out[28:32] = struct.pack('<I', cnt)
+    for i, o in enumerate(offsets):
+        struct.pack_into('<I', out, 32 + i * 4, o)
+    out[header_size:] = body
+    out[4:20] = dxbc_hash(bytes(out[20:]))
+    return bytes(out)
+
+
 def strip_dxbc_chunks(dxbc, drop_fourccs):
     """Return a new DXBC blob with the named chunks removed.
 
@@ -319,8 +565,14 @@ def build_bls(template_path, slang_dir, num_perms, strip=False, verbose=False):
         with open(dxbc_path, 'rb') as fp:
             dxbc = fp.read()
 
+        dxbc = fix_dxbc_signatures(dxbc)
+        dxbc = strip_unused_input_signature(dxbc)
         if strip:
             dxbc = strip_dxbc_chunks(dxbc, {b'RDEF', b'STAT'})
+        else:
+            dxbc = bytearray(dxbc)
+            dxbc[4:20] = dxbc_hash(bytes(dxbc[20:]))
+            dxbc = bytes(dxbc)
 
         perm_blobs.append(pack_perm(tmpl['middle_chunks'][i], tmpl['stages'][i], dxbc))
 

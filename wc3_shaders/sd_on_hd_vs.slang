@@ -13,13 +13,13 @@
 implementing wc3_shaders;
 
 [shader("vertex")]
-public VSOutput sd_on_hd_vs_main<
+public VSOutput<HAS_SHADOWS> sd_on_hd_vs_main<
     TSkin : ISkinning,
     TVF   : IVertexFormat,
     let HAS_SHADOWS : bool
 >(VSInput<TVF> input)
 {
-    VSOutput output;
+    VSOutput<HAS_SHADOWS> output;
 
     // Skinning — same policy choice as the HD path. `SDFourBoneSkinning`
     // renormalises the skinned normal internally so the raw transform
@@ -35,8 +35,7 @@ public VSOutput sd_on_hd_vs_main<
 
     // No renormalise — the SD PS does its own normalize() after
     // interpolation shortens the vector across the triangle.
-    output.normalWS.xyz = transformNormalRaw(skinnedNormal, vsCB2.worldView);
-    output.normalWS.w = 0;
+    output.normalWS = transformNormalRaw(skinnedNormal, vsCB2.worldView);
 
     if (TVF.hasTangent)
     {
@@ -52,12 +51,17 @@ public VSOutput sd_on_hd_vs_main<
     {
         // Cascade clip coords for the SD shadow sampler — cascade
         // matrices take world-space positions, so we need the `world`
-        // product (not the view-space one above).
+        // product (not the view-space one above). Local temps because
+        // `shadowClip*` are Conditional<float4, HAS_SHADOWS> and can't
+        // be bound directly to the `out float4` cascade helper.
         float4 worldPos4 = computeWorldPos4(skinnedPos, vsCB2.world);
         output.worldPos.w = computeFogDepth(worldPos4.z, vsCB2.clipHeight, vsCB2.underWater);
 
-        computeShadowCascades(worldPos4, vsCB1,
-            output.shadowClip0, output.shadowClip1, output.shadowClip2);
+        float4 sc0, sc1, sc2;
+        computeShadowCascades(worldPos4, vsCB1, sc0, sc1, sc2);
+        output.shadowClip0 = sc0;
+        output.shadowClip1 = sc1;
+        output.shadowClip2 = sc2;
     }
     else
     {

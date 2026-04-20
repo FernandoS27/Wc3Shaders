@@ -228,7 +228,7 @@ SSRResult ssrMarch(float3 worldPos, float3 reflectDirWS,
 // engine uploads; we only need its 3×3 rotation.
 float3 rotateToProbeView(float3 v)
 {
-    return mul((float3x3)waterPsCB2.invView, v).xzy;
+    return mul((float3x3)waterPsCB2.view, v).xzy;
 }
 
 // ============================================================

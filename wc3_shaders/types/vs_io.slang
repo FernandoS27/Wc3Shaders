@@ -31,19 +31,22 @@ public struct VSInput<TVF : IVertexFormat>
 // worldPos.w carries the pre-computed fog-depth scalar (see
 // computeFogDepth) rather than a real homogeneous coordinate — the PS
 // reads it to evaluate fog without recomputing the view-space Z.
-// The three shadowClip slots are the three cascade-space clip positions;
-// they are zero-initialised when the shadow path is disabled.
-public struct VSOutput
+// The three shadowClip slots carry the cascade-space clip positions
+// when shadows are enabled; they compile out entirely via `Conditional`
+// in the non-shadow permutations — the shipped game shader omits them
+// from the VS output signature rather than emitting dead zero writes,
+// and we follow that layout so VS→PS linkage matches.
+public struct VSOutput<let HAS_SHADOWS : bool>
 {
     float4 position    : SV_Position;
     float4 color       : COLOR0;
     float4 texCoord    : TEXCOORD0;
     float4 worldPos    : TEXCOORD1;
-    float4 normalWS    : TEXCOORD2;
+    float3 normalWS    : TEXCOORD2;
     float4 tangentWS   : TEXCOORD3;
-    float4 shadowClip0 : TEXCOORD4;
-    float4 shadowClip1 : TEXCOORD5;
-    float4 shadowClip2 : TEXCOORD6;
+    Conditional<float4, HAS_SHADOWS> shadowClip0 : TEXCOORD4;
+    Conditional<float4, HAS_SHADOWS> shadowClip1 : TEXCOORD5;
+    Conditional<float4, HAS_SHADOWS> shadowClip2 : TEXCOORD6;
 };
 
 // Compact payload used by the SD classic pipeline, which does all

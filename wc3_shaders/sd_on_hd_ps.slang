@@ -17,7 +17,7 @@
 implementing wc3_shaders;
 
 [shader("fragment")]
-public PSOutput<IS_MRT> sd_on_hd_ps_main<
+public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> sd_on_hd_ps_main<
     TFog    : IFogMode,
     TAlpha  : IAlphaTest,
     let HAS_IBL          : bool,
@@ -28,7 +28,7 @@ public PSOutput<IS_MRT> sd_on_hd_ps_main<
     let HAS_DEBUG_VIS    : bool
 >(PSInput input, uint frontFace : SV_IsFrontFace)
 {
-    PSOutput<IS_MRT> output;
+    PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> output;
     bool isFrontFace = frontFace != 0;
 
     // Depth prepass short-circuits everything below.

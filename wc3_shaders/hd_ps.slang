@@ -24,7 +24,7 @@
 implementing wc3_shaders;
 
 [shader("fragment")]
-public PSOutput<IS_MRT> ps_main<
+public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> ps_main<
     TFog     : IFogMode,
     TAlpha   : IAlphaTest,
     TMat     : IMaterialLayer,
@@ -35,7 +35,7 @@ public PSOutput<IS_MRT> ps_main<
     let HAS_DEBUG_VIS      : bool
 >(PSInput input, uint frontFace : SV_IsFrontFace)
 {
-    PSOutput<IS_MRT> output;
+    PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> output;
     bool isFrontFace = frontFace != 0;
 
     // Non-IBL / non-prepass draws discard fragments flagged by the VS

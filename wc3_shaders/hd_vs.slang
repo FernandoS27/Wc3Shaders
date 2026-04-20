@@ -16,13 +16,13 @@
 implementing wc3_shaders;
 
 [shader("vertex")]
-public VSOutput vs_main<
+public VSOutput<HAS_SHADOWS> vs_main<
     TSkin : ISkinning,
     TVF   : IVertexFormat,
     let HAS_SHADOWS : bool
 >(VSInput<TVF> input)
 {
-    VSOutput output;
+    VSOutput<HAS_SHADOWS> output;
 
     // Step 1: skinning. Rigid passes the attributes through; FourBone
     // performs a 4-bone linear blend against the bone palette (vsCB3).
@@ -42,8 +42,7 @@ public VSOutput vs_main<
     // Step 3: view-space normal (renormalised — HD PS assumes it's
     // unit-length before any BRDF work). Lives in the same space as
     // `worldPos` above; the PS co-rotates both with `invView`.
-    output.normalWS.xyz = transformNormal(skinnedNormal, vsCB2.worldView);
-    output.normalWS.w = 0;
+    output.normalWS = transformNormal(skinnedNormal, vsCB2.worldView);
 
     // Tangent only when the vertex format advertises one; `tangent.w`
     // carries the handedness sign for bitangent reconstruction in the
@@ -66,13 +65,20 @@ public VSOutput vs_main<
         float4 worldPos4 = computeWorldPos4(skinnedPos, vsCB2.world);
         output.worldPos.w = computeFogDepth(worldPos4.z, vsCB2.clipHeight, vsCB2.underWater);
 
-        computeShadowCascades(worldPos4, vsCB1,
-            output.shadowClip0, output.shadowClip1, output.shadowClip2);
+        // Pass local temps through the `out float4` helper; `shadowClip*`
+        // are Conditional<float4, HAS_SHADOWS> so the cascade path must
+        // go through a concrete float4 before assigning.
+        float4 sc0, sc1, sc2;
+        computeShadowCascades(worldPos4, vsCB1, sc0, sc1, sc2);
+        output.shadowClip0 = sc0;
+        output.shadowClip1 = sc1;
+        output.shadowClip2 = sc2;
     }
     else
     {
         // Non-shadow path skips the full world transform and only reads
         // the Z row of `world` — cheaper by 3 multiplies + an adder.
+        // The shadowClip writes below compile out entirely via Conditional.
         float worldZ = computeScalarWorldZ(skinnedPos, vsCB2.world);
         output.worldPos.w = computeFogDepth(worldZ, vsCB2.clipHeight, vsCB2.underWater);
 
