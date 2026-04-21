@@ -11,9 +11,11 @@ This is the inverse of extract_bls.py. For each shader family we:
      chunk layout exactly.
   4. Repack into the BLS wire format and write out the file.
 
-The nine shader-family -> Slang-output mapping lives in FAMILY_MAP /
-METAL_FAMILY_MAP below. Shipped BLS files live under
-war3.w3mod/shaders/{ps,vs,mtlfs,mtlvs}/*.bls. Slang outputs live under:
+The shader-family -> Slang-output mapping lives in ``wc3_shaders.json`` at
+the repo root (loaded via ``shader_config.load_families``); the same
+config feeds compile_all_slang.py so both scripts stay in sync. Shipped
+BLS files live under war3.w3mod/shaders/{ps,vs,mtlfs,mtlvs}/*.bls. Slang
+outputs live under:
   <repo>/slang_out/d3d11/<family>/perm_NNN.dxbc      (DX, any platform)
   <repo>/slang_out/metal/<family>/perm_NNN.metallib  (Metal, macOS only)
 
@@ -33,6 +35,8 @@ import struct
 import sys
 from pathlib import Path
 
+from shader_config import load_families
+
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_SLANG_OUT = REPO_ROOT / "slang_out"
 DXBC_TARGET_SUBDIR  = "d3d11"   # compile_all_slang writes .dxbc under this target.
@@ -51,51 +55,13 @@ BLS_DXBC_TAG    = 4             # value at DX perm inner header +0x4C
 BLS_METAL_STAGE = 1             # DX perms carry a real stage id; Metal perms
                                 # always use stage=1 (MTLB encodes the stage).
 
-# Which Slang output directory feeds which shipped DX BLS, and how many perms
-# each family emits. The tuple also pins the VS/PS subfolder under
-# --templates so we can find the template BLS automatically.
-FAMILY_MAP = {
-    'hd_ps':          ('ps', 'hd.bls',          512),
-    'crystal_ps':     ('ps', 'crystal.bls',     512),
-    'toon_hd_ps':     ('ps', 'toon_hd.bls',     512),
-    'sd_classic_ps':  ('ps', 'sd.bls',          200),
-    'sd_on_hd_ps':    ('ps', 'sd_on_hd.bls',    384),
-    'water_ps':       ('ps', 'water.bls',         4),
-    'tonemap_ps':     ('ps', 'tonemap.bls',       1),
-    'hd_vs':          ('vs', 'hd.bls',          144),
-    'toon_hd_vs':     ('vs', 'toon_hd.bls',     144),
-    'sd_highspec_vs': ('vs', 'sd_highspec.bls', 162),
-    'sd_on_hd_vs':    ('vs', 'sd_on_hd.bls',    144),
-    'water_vs':       ('vs', 'water.bls',         1),
-}
-
-# Same families, re-pointed at the Metal BLS bundles under mtlfs/ and
-# mtlvs/. Perm counts match the DX side — DX and Metal share the same
-# Slang-level permutation enumeration.
-METAL_FAMILY_MAP = {
-    'hd_ps':          ('mtlfs', 'hd.bls',          512),
-    'crystal_ps':     ('mtlfs', 'crystal.bls',     512),
-    'toon_hd_ps':     ('mtlfs', 'toon_hd.bls',     512),
-    'sd_classic_ps':  ('mtlfs', 'sd.bls',          200),
-    'sd_on_hd_ps':    ('mtlfs', 'sd_on_hd.bls',    384),
-    'hd_vs':          ('mtlvs', 'hd.bls',          144),
-    'toon_hd_vs':     ('mtlvs', 'toon_hd.bls',     144),
-    'sd_highspec_vs': ('mtlvs', 'sd_highspec.bls', 162),
-    'sd_on_hd_vs':    ('mtlvs', 'sd_on_hd.bls',    144),
-    'water_vs':       ('mtlvs', 'water.bls',         1),
-    'water_ps':       ('mtlfs', 'water.bls',         4),
-    'tonemap_ps':     ('mtlfs', 'tonemap.bls',       1),
-}
-
-# Families that have no shipped BLS of their own and must clone a
-# different family's BLS as their template. The rebuilt file is still
-# written under the family's own output name (FAMILY_MAP above); only
-# the template lookup uses the override name. This applies to both the
-# DX and Metal template paths since the shipped names match.
-TEMPLATE_OVERRIDE = {
-    'toon_hd_ps': 'hd.bls',
-    'toon_hd_vs': 'hd.bls',
-}
+# Shader-family configuration is shared with compile_all_slang.py through
+# wc3_shaders.json. FamilyConfig exposes stage, perm_count, bls_name, and the
+# optional template override — everything this script previously carried
+# in FAMILY_MAP / METAL_FAMILY_MAP / TEMPLATE_OVERRIDE. DX and Metal share
+# the same basename and perm count for every family; only the containing
+# directory differs (ps/vs vs mtlfs/mtlvs), which FamilyConfig derives.
+FAMILIES = load_families()
 
 
 # ============================================================
@@ -847,7 +813,7 @@ def main():
                     help='directory containing ps/*.bls, vs/*.bls (required) and '
                          'mtlfs/*.bls, mtlvs/*.bls (used when rebuilding Metal BLS)')
     ap.add_argument('--output', required=True, help='output directory for rebuilt BLS')
-    ap.add_argument('--family', action='append', choices=list(FAMILY_MAP),
+    ap.add_argument('--family', action='append', choices=list(FAMILIES),
                     help='limit to specific family (default: all)')
     ap.add_argument('--strip', action='store_true',
                     help='strip RDEF/STAT chunks from DXBC (match shipped chunk layout) '
@@ -855,19 +821,22 @@ def main():
     ap.add_argument('--verbose', '-v', action='store_true')
     args = ap.parse_args()
 
-    families = args.family or list(FAMILY_MAP)
+    family_names = args.family or list(FAMILIES)
     os.makedirs(args.output, exist_ok=True)
 
     dxbc_root  = os.path.join(args.slang_out, DXBC_TARGET_SUBDIR)
     metal_root = os.path.join(args.slang_out, METAL_TARGET_SUBDIR)
 
-    for fam in families:
+    for fam in family_names:
+        cfg = FAMILIES[fam]
+        num_perms = cfg.perm_count
+        # `toon_hd_*` ships no dedicated BLS — effective_template falls
+        # back to the HD template for its resource/binding metadata while
+        # the rebuilt file is still written under the family's own name.
+        template_name = cfg.effective_template
+
         # ---------- DX (ps/, vs/) ----------
-        stage_dir, bls_name, num_perms = FAMILY_MAP[fam]
-        # `toon_hd_*` ships no dedicated BLS — fall back to the HD template
-        # for its resource/binding metadata while emitting toon_hd.bls.
-        template_name = TEMPLATE_OVERRIDE.get(fam, bls_name)
-        template = os.path.join(args.templates, stage_dir, template_name)
+        template = os.path.join(args.templates, cfg.dx_dir, template_name)
         slang_dir = os.path.join(dxbc_root, fam)
 
         if not os.path.isfile(template):
@@ -876,9 +845,9 @@ def main():
             print(f'SKIP {fam}: slang dir missing ({slang_dir}). '
                   f'Run compile_all_slang.py --target d3d11 first.', file=sys.stderr)
         else:
-            out_dir = os.path.join(args.output, stage_dir)
+            out_dir = os.path.join(args.output, cfg.dx_dir)
             os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, bls_name)
+            out_path = os.path.join(out_dir, cfg.bls_name)
             try:
                 blob = build_bls(template, slang_dir, num_perms,
                                  strip=args.strip, verbose=args.verbose)
@@ -889,22 +858,20 @@ def main():
                 print(f'FAIL {fam}: {e}', file=sys.stderr)
 
         # ---------- Metal (mtlfs/, mtlvs/) — only if metallibs were emitted ----
-        m_stage_dir, m_bls_name, m_num_perms = METAL_FAMILY_MAP[fam]
         m_slang_dir = os.path.join(metal_root, fam)
         if not has_metallibs(m_slang_dir):
             continue
 
-        m_template_name = TEMPLATE_OVERRIDE.get(fam, m_bls_name)
-        m_template = os.path.join(args.templates, m_stage_dir, m_template_name)
-        m_out_dir  = os.path.join(args.output, m_stage_dir)
+        m_template = os.path.join(args.templates, cfg.metal_dir, template_name)
+        m_out_dir  = os.path.join(args.output, cfg.metal_dir)
         os.makedirs(m_out_dir, exist_ok=True)
-        m_out_path = os.path.join(m_out_dir, m_bls_name)
+        m_out_path = os.path.join(m_out_dir, cfg.bls_name)
         try:
-            blob = build_metal_bls(m_template, m_slang_dir, m_num_perms,
+            blob = build_metal_bls(m_template, m_slang_dir, num_perms,
                                    verbose=args.verbose)
             with open(m_out_path, 'wb') as fp:
                 fp.write(blob)
-            print(f'wrote {m_out_path} ({len(blob):#x} bytes, {m_num_perms} perms)')
+            print(f'wrote {m_out_path} ({len(blob):#x} bytes, {num_perms} perms)')
         except Exception as e:
             print(f'FAIL {fam} [metal]: {e}', file=sys.stderr)
 

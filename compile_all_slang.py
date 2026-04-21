@@ -21,25 +21,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from shader_config import load_families
+
 REPO_ROOT = Path(__file__).resolve().parent
 SHADER = REPO_ROOT / "wc3_shaders" / "wc3_shaders.slang"
 CUSTOM_SHADER = REPO_ROOT / "custom_shaders" / "custom_shaders.slang"
 WC3_INCLUDE_DIR = REPO_ROOT / "wc3_shaders"
 OUT_BASE = REPO_ROOT / "slang_out"
 
-# Families whose entry points live in the custom_shaders module (which
-# imports wc3_shaders). These compile from CUSTOM_SHADER with an include
-# path that lets slangc resolve `import wc3_shaders;`.
-CUSTOM_FAMILIES = {"toon_hd_vs", "toon_hd_ps"}
-
-FAMILIES = (
-    "hd_vs", "hd_ps", "crystal_ps",
-    "toon_hd_vs", "toon_hd_ps",
-    "sd_on_hd_vs", "sd_on_hd_ps",
-    "sd_highspec_vs", "sd_classic_ps",
-    "water_vs", "water_ps",
-    "tonemap_ps",
-)
+# Family metadata — stage, entry point, perm_count, which source module
+# hosts the entry point — comes from wc3_shaders.json via shader_config. The
+# module="custom" families compile from CUSTOM_SHADER with WC3_INCLUDE_DIR
+# on the include path so `import wc3_shaders;` resolves.
+FAMILY_CONFIGS = load_families()
+FAMILIES = tuple(FAMILY_CONFIGS.keys())
 
 # Stage → profile per target + output file extension and optional extra
 # slangc args. The metal entry can be switched to metallib (compiled Metal
@@ -162,7 +157,7 @@ def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
     # wc3_shaders' own entry points (vs_main, ps_main, …) against the
     # current profile while it's being imported — without it the
     # import pipeline emits all entry points in the module.
-    if family in CUSTOM_FAMILIES:
+    if FAMILY_CONFIGS[family].module == "custom":
         shader_path = CUSTOM_SHADER
         include_dirs = [WC3_INCLUDE_DIR]
         custom_extra = extra + [
@@ -434,21 +429,41 @@ def map_sd_classic_ps(idx: int) -> PermSpec:
     )
 
 
-# family, perm count, mapper, stage ("vs" or "ps" — picks the profile
-# from TARGETS for whichever --target is active).
+# Per-family permutation mappers. These are the only piece of family
+# metadata that stays as code — each maps a linear perm index to the
+# tuple of slangc -specialize types for that perm (bit-packed feature
+# axes, conditional type-name selection). Everything else (stage,
+# perm_count, entry point, module) comes from wc3_shaders.json.
+MAPPERS: dict[str, Callable[[int], PermSpec]] = {
+    "hd_vs":          map_hd_vs,
+    "hd_ps":          map_hd_ps,
+    "toon_hd_vs":     map_toon_hd_vs,
+    "toon_hd_ps":     map_toon_hd_ps,
+    "crystal_ps":     map_crystal_ps,
+    "sd_on_hd_vs":    map_sd_on_hd_vs,
+    "sd_on_hd_ps":    map_sd_on_hd_ps,
+    "sd_highspec_vs": map_sd_highspec_vs,
+    "sd_classic_ps":  map_sd_classic_ps,
+    "water_vs":       map_water_vs,
+    "water_ps":       map_water_ps,
+    "tonemap_ps":     map_tonemap_ps,
+}
+
+# Fail fast if the config and the mapper set drift — every family listed
+# in wc3_shaders.json must have a mapper implementation here, and vice versa.
+_missing_mappers = set(FAMILY_CONFIGS) - set(MAPPERS)
+_orphan_mappers  = set(MAPPERS)        - set(FAMILY_CONFIGS)
+if _missing_mappers or _orphan_mappers:
+    raise SystemExit(
+        f"wc3_shaders.json / MAPPERS mismatch — "
+        f"missing mappers for {sorted(_missing_mappers)}, "
+        f"orphan mappers for {sorted(_orphan_mappers)}"
+    )
+
+# Iteration order matches wc3_shaders.json (i.e. FAMILY_CONFIGS insertion order).
 SWEEPS = [
-    ("hd_vs",          144, map_hd_vs,          "vs"),
-    ("hd_ps",          512, map_hd_ps,          "ps"),
-    ("toon_hd_vs",     144, map_toon_hd_vs,     "vs"),
-    ("toon_hd_ps",     512, map_toon_hd_ps,     "ps"),
-    ("crystal_ps",     512, map_crystal_ps,     "ps"),
-    ("sd_on_hd_vs",    144, map_sd_on_hd_vs,    "vs"),
-    ("sd_on_hd_ps",    384, map_sd_on_hd_ps,    "ps"),
-    ("sd_highspec_vs", 162, map_sd_highspec_vs, "vs"),
-    ("sd_classic_ps",  200, map_sd_classic_ps,  "ps"),
-    ("water_vs",         1, map_water_vs,       "vs"),
-    ("water_ps",         4, map_water_ps,       "ps"),
-    ("tonemap_ps",       1, map_tonemap_ps,     "ps"),
+    (name, cfg.perm_count, MAPPERS[name], cfg.stage)
+    for name, cfg in FAMILY_CONFIGS.items()
 ]
 
 
