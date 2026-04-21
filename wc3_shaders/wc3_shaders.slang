@@ -86,6 +86,9 @@ __include "ps/sd_classic_ps_body";
 // Water pixel-shader body.
 __include "ps/water_ps_body";
 
+// Tonemap pixel-shader body.
+__include "ps/tonemap_ps_body";
+
 // Vertex-shader helpers.
 __include "vs/vs_body";
 __include "vs/sd_vs_lighting";
@@ -100,3 +103,4 @@ __include "sd_highspec_vs";
 __include "sd_classic_ps";
 __include "water_vs";
 __include "water_ps";
+__include "tonemap_ps";

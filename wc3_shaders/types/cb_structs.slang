@@ -307,3 +307,25 @@ public SamplerState s_waterScene  : register(s4);
 public SamplerState s_waterDepth  : register(s1);
 public SamplerState s_waterNormal : register(s2);
 public SamplerState s_waterProbe  : register(s3);
+
+// Per-draw constants for the tonemap pixel shader (b1). The engine
+// only uploads a single 16-byte slot — the linear exposure multiplier
+// applied to the HDR scene color before the ACES filmic curve — but
+// the CB is still dimensioned as a full float4 to match the wire
+// layout fxc emits for `float4 cb1[1]`.
+public struct TonemapPSPerDraw
+{
+    public float  exposure;
+    public float3 _p0;
+};
+
+public ConstantBuffer<TonemapPSPerDraw> tonemapPsCB1 : register(b1);
+
+// Tonemap PS texture bindings. Aliases the same D3D slots the HD mesh
+// PS uses (t0 / s0) — the tonemap pass runs on its own pipeline object
+// and slangc only emits bindings the active entry point references, so
+// these declarations coexist with the HD material bindings above.
+//   t0 = linear-HDR scene target produced by the preceding lighting pass
+//   s0 = linear-clamp sampler paired with the scene target
+public Texture2D<float4> t_sceneHdr : register(t0);
+public SamplerState      s_sceneHdr : register(s0);
