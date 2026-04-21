@@ -18,10 +18,10 @@ implementing wc3_shaders;
 // _pad2.x is repurposed as "ambient weight" in the IBL combine path.
 public struct ShaderLight
 {
-    float3 ambient;    float _pad0;
-    float3 diffuse;    float _pad1;
-    float3 position;   float  type;
-    float4 _pad2;
+    public float3 ambient;    public float _pad0;
+    public float3 diffuse;    public float _pad1;
+    public float3 position;   public float  type;
+    public float4 _pad2;
 };
 
 // Per-draw constants for the HD pixel shader (b2).
@@ -30,32 +30,32 @@ public struct ShaderLight
 // between the "from" and "to" probe cubemaps, and the active light list.
 public struct PSPerDraw
 {
-    float   alphaRef;         float3 _p0;
-    float   fogStart;         float  fogEnd;
-    float   fogDensity;       float  _p1;
-    float4  fogColor;
-    float4x4 worldView;
-    float4x4 view;
-    float4x4 projection;
-    float4  viewport;
-    float   inverseSoftness;  float  cloakAmount;
-    float   fresnelTeamColor; float  _p2;
-    float4  _pad17;
-    float4  fresnelColor;
-    float   envFromMipEnd;    float  envToMipEnd;
-    float   envTransitionT;   float  _p3;
-    float   effectTime;       float  emissiveGain;
-    float   lightCount;       float  useNdf;
-    ShaderLight lights[8];
+    public float   alphaRef;         public float3 _p0;
+    public float   fogStart;         public float  fogEnd;
+    public float   fogDensity;       public float  _p1;
+    public float4  fogColor;
+    public float4x4 worldView;
+    public float4x4 view;
+    public float4x4 projection;
+    public float4  viewport;
+    public float   inverseSoftness;  public float  cloakAmount;
+    public float   fresnelTeamColor; public float  _p2;
+    public float4  _pad17;
+    public float4  fresnelColor;
+    public float   envFromMipEnd;    public float  envToMipEnd;
+    public float   envTransitionT;   public float  _p3;
+    public float   effectTime;       public float  emissiveGain;
+    public float   lightCount;       public float  useNdf;
+    public ShaderLight lights[8];
 };
 
 // The three cascade view-projection matrices used by the shadow map PCF
 // sampling path. Uploaded at b1 in the vertex stage.
 public struct ShadowCascades
 {
-    float4x4 cascade0;
-    float4x4 cascade1;
-    float4x4 cascade2;
+    public float4x4 cascade0;
+    public float4x4 cascade1;
+    public float4x4 cascade2;
 };
 
 // Per-draw constants for the HD vertex shader (b2).
@@ -75,16 +75,16 @@ public struct ShadowCascades
 //   worldViewProj  @ 0x080 — object → clip.   Writes SV_POSITION.
 public struct VSPerDraw
 {
-    float4x4 world;
-    float4x4 worldView;
-    float4x4 worldViewProj;
-    float   effectTime;   float popcornScale;
-    float   clipHeight;   float underWater;
-    float4  diffuseColor;
-    float4  texMtx0Row0;
-    float4  texMtx0Row1;
-    float4  texMtx1Row0;
-    float4  texMtx1Row1;
+    public float4x4 world;
+    public float4x4 worldView;
+    public float4x4 worldViewProj;
+    public float   effectTime;   public float popcornScale;
+    public float   clipHeight;   public float underWater;
+    public float4  diffuseColor;
+    public float4  texMtx0Row0;
+    public float4  texMtx0Row1;
+    public float4  texMtx1Row0;
+    public float4  texMtx1Row1;
 };
 
 // Skeletal palette at b3: up to 256 bones, each an affine transform.
@@ -96,7 +96,7 @@ public struct VSPerDraw
 // come from `mul(float4(pos, 1), M)` (row vector on the left).
 public struct BonePalette
 {
-    float4x3 matrices[256];
+    public float4x3 matrices[256];
 };
 
 // Debug visualisation controls (b3 in PS).
@@ -110,10 +110,10 @@ public struct BonePalette
 // the crystal pipeline shares the same b3 layout.
 public struct DebugVisCB
 {
-    uint  enabledShaders;  float  debugMode;
-    float2 _p0;
-    float3 overrideAlbedo; float  _p1;
-    float3 overrideOrm;    float  _p2;
+    public uint  enabledShaders;  public float  debugMode;
+    public float2 _p0;
+    public float3 overrideAlbedo; public float  _p1;
+    public float3 overrideOrm;    public float  _p2;
 };
 
 public ConstantBuffer<PSPerDraw>      psCB2 : register(b2);
@@ -153,40 +153,40 @@ public SamplerState s_brdfLut   : register(s15);
 // view-to-world rotation used to orient the IBL cubemap samples.
 public struct SDPSPerDraw
 {
-    float   alphaRef;         float3 _p0;
-    float   fogStart;         float  fogEnd;
-    float   fogDensity;       float  _p1;
-    float4  fogColor;
+    public float   alphaRef;         public float3 _p0;
+    public float   fogStart;         public float  fogEnd;
+    public float   fogDensity;       public float  _p1;
+    public float4  fogColor;
 
-    float4  _pad3;
-    float4  _pad4;
-    float4  _pad5;
-    float4  _pad6;
+    public float4  _pad3;
+    public float4  _pad4;
+    public float4  _pad5;
+    public float4  _pad6;
 
-    float4  invViewRow0;
-    float4  invViewRow1;
-    float4  invViewRow2;
+    public float4  invViewRow0;
+    public float4  invViewRow1;
+    public float4  invViewRow2;
 
-    float4  _pad10;
-    float4  _pad11;
-    float4  _pad12;
-    float4  _pad13;
-    float4  _pad14;
-    float4  _pad15;
+    public float4  _pad10;
+    public float4  _pad11;
+    public float4  _pad12;
+    public float4  _pad13;
+    public float4  _pad14;
+    public float4  _pad15;
 
-    float   inverseSoftness;  float  cloakAmount;
-    float2  _p16;
+    public float   inverseSoftness;  public float  cloakAmount;
+    public float2  _p16;
 
-    float4  _pad17;
-    float4  _pad18;
+    public float4  _pad17;
+    public float4  _pad18;
 
-    float   envFromMipEnd;    float  envToMipEnd;
-    float   envTransitionT;   float  _p19;
+    public float   envFromMipEnd;    public float  envToMipEnd;
+    public float   envTransitionT;   public float  _p19;
 
     // lightCountSlot.z holds the uint-reinterpreted active light count.
-    float4  lightCountSlot;
+    public float4  lightCountSlot;
 
-    ShaderLight lights[8];
+    public ShaderLight lights[8];
 };
 
 // Scalar cascade count for the shadow sampler PS path (b1).
@@ -194,7 +194,7 @@ public struct SDPSPerDraw
 // same cb1[0].x active-cascade count.
 public struct ShadowCascadeCount
 {
-    float numCascades;  float3 _pad;
+    public float numCascades;  public float3 _pad;
 };
 
 public ConstantBuffer<SDPSPerDraw>        sdPsCB2 : register(b2);
@@ -215,14 +215,14 @@ public SamplerComparisonState sd_s_shadow2 : register(s12);
 // happens entirely in the VS here, so the PS path doesn't need them.
 public struct SDHighspecVSPerDraw
 {
-    float4x4 world;
-    float4x4 worldViewProj;
-    float4   diffuseColor;
-    float4   texMtx0Row0;
-    float4   texMtx0Row1;
-    float4   texMtx1Row0;
-    float4   texMtx1Row1;
-    ShaderLight lights[8];
+    public float4x4 world;
+    public float4x4 worldViewProj;
+    public float4   diffuseColor;
+    public float4   texMtx0Row0;
+    public float4   texMtx0Row1;
+    public float4   texMtx1Row0;
+    public float4   texMtx1Row1;
+    public ShaderLight lights[8];
 };
 
 // Per-draw constants for the SD classic pixel shader (b0): the classic
@@ -230,10 +230,10 @@ public struct SDHighspecVSPerDraw
 // texture-stage ops and the interpolated vertex color.
 public struct SDClassicPSPerDraw
 {
-    float  alphaRef;     float3 _p0;
-    float  fogStart;     float  fogEnd;
-    float  fogDensity;   float  _p1;
-    float4 fogColor;
+    public float  alphaRef;     public float3 _p0;
+    public float  fogStart;     public float  fogEnd;
+    public float  fogDensity;   public float  _p1;
+    public float4 fogColor;
 };
 
 public ConstantBuffer<SDHighspecVSPerDraw>  sdHighspecVsCB0 : register(b0);
@@ -255,33 +255,33 @@ public ConstantBuffer<SDClassicPSPerDraw>   sdClassicPsCB0  : register(b0);
 // the water shader never reads that slot and D3D tolerates the extra.
 public struct WaterPSPerDraw
 {
-    float4  _pad0;                                 // cb2[0]
+    public float4  _pad0;                                 // cb2[0]
 
-    float   fogStart;        float  fogEnd;
-    float   fogDensity;      float  _p1;           // cb2[1]
-    float4  fogColor;                              // cb2[2]
+    public float   fogStart;        public float  fogEnd;
+    public float   fogDensity;      public float  _p1;           // cb2[1]
+    public float4  fogColor;                              // cb2[2]
 
     float4x4 _padWorldView;                        // cb2[3..6] (unused by water)
-    float4x4 view;                                 // cb2[7..10]
-    float4x4 worldToClip;                          // cb2[11..14]
-    float4   viewport;                             // cb2[15]
+    public float4x4 view;                                 // cb2[7..10]
+    public float4x4 worldToClip;                          // cb2[11..14]
+    public float4   viewport;                             // cb2[15]
 
     // cb2[16]: HDR clamp applied to the emissive probe color.
-    float3   ambientClamp;   float _p16;           // cb2[16]
+    public float3   ambientClamp;   public float _p16;           // cb2[16]
 
     // cb2[17]: depth-based shore ramp distances.
-    float    refractSoftness;
-    float    litSoftness;    float2 _p17;          // cb2[17]
+    public float    refractSoftness;
+    public float    litSoftness;    public float2 _p17;          // cb2[17]
 
-    float4   _pad18;                               // cb2[18]
+    public float4   _pad18;                               // cb2[18]
 
-    float    envFromMipEnd;  float  envToMipEnd;
-    float    envTransitionT; float  _p19;          // cb2[19]
+    public float    envFromMipEnd;  public float  envToMipEnd;
+    public float    envTransitionT; public float  _p19;          // cb2[19]
 
-    float    effectTime;     float  _p20_y;
-    float    lightCount;     float  useNdf;        // cb2[20]
+    public float    effectTime;     public float  _p20_y;
+    public float    lightCount;     public float  useNdf;        // cb2[20]
 
-    ShaderLight lights[8];                         // cb2[21..]
+    public ShaderLight lights[8];                         // cb2[21..]
 };
 
 public ConstantBuffer<WaterPSPerDraw> waterPsCB2 : register(b2);

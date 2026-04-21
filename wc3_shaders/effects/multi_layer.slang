@@ -28,8 +28,8 @@ static const float ML_EMISSIVE_BLEND = 0.75;
 
 public struct MultiLayerResult
 {
-    float3 albedo;
-    float3 emissive;
+    public float3 albedo;
+    public float3 emissive;
 };
 
 public MultiLayerResult multiLayerBlend(

@@ -17,14 +17,14 @@ implementing wc3_shaders;
 // reconstruct the bitangent in the pixel shader.
 public struct VSInput<TVF : IVertexFormat>
 {
-    float3 position    : ATTR0;
-    float3 normal      : ATTR1;
-    float4 vertColor   : ATTR2;
-    float2 uv0         : ATTR3;
-    float2 uv1         : ATTR4;
-    float4 weights     : ATTR5;
-    uint4  boneIndices : ATTR6;
-    float4 tangent     : ATTR7;
+    public float3 position    : ATTR0;
+    public float3 normal      : ATTR1;
+    public float4 vertColor   : ATTR2;
+    public float2 uv0         : ATTR3;
+    public float2 uv1         : ATTR4;
+    public float4 weights     : ATTR5;
+    public uint4  boneIndices : ATTR6;
+    public float4 tangent     : ATTR7;
 };
 
 // Full HD vertex-to-pixel payload.
@@ -38,15 +38,15 @@ public struct VSInput<TVF : IVertexFormat>
 // and we follow that layout so VS→PS linkage matches.
 public struct VSOutput<let HAS_SHADOWS : bool>
 {
-    float4 position    : SV_Position;
-    float4 color       : COLOR0;
-    float4 texCoord    : TEXCOORD0;
-    float4 worldPos    : TEXCOORD1;
-    float3 normalWS    : TEXCOORD2;
-    float4 tangentWS   : TEXCOORD3;
-    Conditional<float4, HAS_SHADOWS> shadowClip0 : TEXCOORD4;
-    Conditional<float4, HAS_SHADOWS> shadowClip1 : TEXCOORD5;
-    Conditional<float4, HAS_SHADOWS> shadowClip2 : TEXCOORD6;
+    public float4 position    : SV_Position;
+    public float4 color       : COLOR0;
+    public float4 texCoord    : TEXCOORD0;
+    public float4 worldPos    : TEXCOORD1;
+    public float3 normalWS    : TEXCOORD2;
+    public float4 tangentWS   : TEXCOORD3;
+    public Conditional<float4, HAS_SHADOWS> shadowClip0 : TEXCOORD4;
+    public Conditional<float4, HAS_SHADOWS> shadowClip1 : TEXCOORD5;
+    public Conditional<float4, HAS_SHADOWS> shadowClip2 : TEXCOORD6;
 };
 
 // Compact payload used by the SD classic pipeline, which does all
@@ -54,10 +54,10 @@ public struct VSOutput<let HAS_SHADOWS : bool>
 // the transformed UVs and a world-space position for fog.
 public struct SDVSOutput
 {
-    float4 position    : SV_Position;
-    float4 color       : COLOR0;
-    float4 texCoord    : TEXCOORD0;
-    float3 worldPos    : TEXCOORD1;
+    public float4 position    : SV_Position;
+    public float4 color       : COLOR0;
+    public float4 texCoord    : TEXCOORD0;
+    public float3 worldPos    : TEXCOORD1;
 };
 
 // Water vertex stream (subset of the HD stream — no tangent, no UV1,
@@ -66,10 +66,10 @@ public struct SDVSOutput
 // buffer rather than the 8-attribute HD one.
 public struct WaterVSInput
 {
-    float3 position    : ATTR0;
-    float3 normal      : ATTR1;
-    float4 vertColor   : ATTR2;
-    float2 uv          : ATTR3;
+    public float3 position    : ATTR0;
+    public float3 normal      : ATTR1;
+    public float4 vertColor   : ATTR2;
+    public float2 uv          : ATTR3;
 };
 
 // Water VS → PS payload. Differs from VSOutput in two ways:
@@ -82,10 +82,10 @@ public struct WaterVSInput
 // (and doesn't emit dead writes to unused lanes).
 public struct WaterVSOutput
 {
-    float4 position    : SV_Position;
-    float4 color       : COLOR0;
-    float2 texCoord    : TEXCOORD0;
-    float3 worldPos    : TEXCOORD1;
-    float3 normalWS    : TEXCOORD3;
-    float4 upAxisWS    : TEXCOORD4;
+    public float4 position    : SV_Position;
+    public float4 color       : COLOR0;
+    public float2 texCoord    : TEXCOORD0;
+    public float3 worldPos    : TEXCOORD1;
+    public float3 normalWS    : TEXCOORD3;
+    public float4 upAxisWS    : TEXCOORD4;
 };

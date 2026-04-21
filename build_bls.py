@@ -57,28 +57,42 @@ BLS_METAL_STAGE = 1             # DX perms carry a real stage id; Metal perms
 FAMILY_MAP = {
     'hd_ps':          ('ps', 'hd.bls',          512),
     'crystal_ps':     ('ps', 'crystal.bls',     512),
+    'toon_hd_ps':     ('ps', 'toon_hd.bls',     512),
     'sd_classic_ps':  ('ps', 'sd.bls',          200),
     'sd_on_hd_ps':    ('ps', 'sd_on_hd.bls',    384),
     'water_ps':       ('ps', 'water.bls',         4),
     'hd_vs':          ('vs', 'hd.bls',          144),
+    'toon_hd_vs':     ('vs', 'toon_hd.bls',     144),
     'sd_highspec_vs': ('vs', 'sd_highspec.bls', 162),
     'sd_on_hd_vs':    ('vs', 'sd_on_hd.bls',    144),
     'water_vs':       ('vs', 'water.bls',         1),
 }
 
-# Same seven families, re-pointed at the Metal BLS bundles under mtlfs/ and
+# Same families, re-pointed at the Metal BLS bundles under mtlfs/ and
 # mtlvs/. Perm counts match the DX side — DX and Metal share the same
 # Slang-level permutation enumeration.
 METAL_FAMILY_MAP = {
     'hd_ps':          ('mtlfs', 'hd.bls',          512),
     'crystal_ps':     ('mtlfs', 'crystal.bls',     512),
+    'toon_hd_ps':     ('mtlfs', 'toon_hd.bls',     512),
     'sd_classic_ps':  ('mtlfs', 'sd.bls',          200),
     'sd_on_hd_ps':    ('mtlfs', 'sd_on_hd.bls',    384),
     'hd_vs':          ('mtlvs', 'hd.bls',          144),
+    'toon_hd_vs':     ('mtlvs', 'toon_hd.bls',     144),
     'sd_highspec_vs': ('mtlvs', 'sd_highspec.bls', 162),
     'sd_on_hd_vs':    ('mtlvs', 'sd_on_hd.bls',    144),
     'water_vs':       ('mtlvs', 'water.bls',         1),
     'water_ps':       ('mtlfs', 'water.bls',         4),
+}
+
+# Families that have no shipped BLS of their own and must clone a
+# different family's BLS as their template. The rebuilt file is still
+# written under the family's own output name (FAMILY_MAP above); only
+# the template lookup uses the override name. This applies to both the
+# DX and Metal template paths since the shipped names match.
+TEMPLATE_OVERRIDE = {
+    'toon_hd_ps': 'hd.bls',
+    'toon_hd_vs': 'hd.bls',
 }
 
 
@@ -172,7 +186,7 @@ def _shex_declared_input_regs(shex_body):
     return used
 
 
-def _rewrite_sgn_body(body, keep_regs, remap=None):
+def _rewrite_sgn_body(body, keep_regs, remap=None, overrides=None):
     """Rewrite an ISGN/OSGN/PCSG body, keeping only entries whose register
     index is in ``keep_regs`` (or any entry with a non-zero system-value
     tag — SV_Position etc. must stay in the signature even when the
@@ -180,6 +194,11 @@ def _rewrite_sgn_body(body, keep_regs, remap=None):
     linkage against those entries). Optionally applies a ``remap`` of
     old→new register numbers so the kept entries can be renumbered to
     be contiguous; the SHEX body must be renumbered with the same map.
+    ``overrides`` is a ``{old_reg: (sys_val, comp_ty, mask_rw)}`` dict —
+    when present, kept entries adopt the template's metadata on those
+    fields so the rebuilt signature matches shipped even when our
+    compiled body reads a different component subset (mask_rw differs)
+    or the template typed an entry differently.
     Preserves entry order, dedupes names in the string table, and pads
     the output to a 4-byte boundary."""
     count, _hdr_dw = struct.unpack_from('<II', body, 0)
@@ -190,11 +209,24 @@ def _rewrite_sgn_body(body, keep_regs, remap=None):
             struct.unpack_from('<IIIIII', body, off)
         if reg not in keep_regs and sys_val == 0:
             continue
+        original_reg = reg
         if remap is not None and reg in remap:
             reg = remap[reg]
+        if overrides is not None and original_reg in overrides:
+            o_sv, o_ct, o_mr = overrides[original_reg]
+            sys_val = o_sv
+            comp_ty = o_ct
+            mask_rw = o_mr
         end = body.find(b'\x00', name_off)
         name = bytes(body[name_off:end])
         kept.append((name, sem_idx, sys_val, comp_ty, reg, mask_rw))
+
+    # fxc emits signature entries sorted by (final) register number so
+    # the engine can index them by slot. slangc orders them by the
+    # original struct layout, which produces the same set but a
+    # different sequence once we remap — sort here so the wire bytes
+    # match shipped.
+    kept.sort(key=lambda e: e[4])
 
     new_count = len(kept)
     entries_end = 8 + new_count * 24
@@ -213,8 +245,11 @@ def _rewrite_sgn_body(body, keep_regs, remap=None):
                            str_offs[name], sem_idx, sys_val,
                            comp_ty, reg, mask_rw)
     out += str_table
+    # fxc pads the trailing string table to a 4-byte boundary with
+    # 0xAB filler rather than 0x00. The engine validates that shape,
+    # so rebuild with the same filler for byte-exact parity with shipped.
     while len(out) % 4:
-        out.append(0)
+        out.append(0xAB)
     return bytes(out)
 
 
@@ -255,21 +290,51 @@ def _renumber_shex_input_regs(shex_body, remap):
     return bytes(buf)
 
 
-def strip_unused_input_signature(dxbc):
-    """Remove ISGN entries whose register isn't actually declared in the
-    shader's SHEX program, then renumber the remaining input registers
-    (both ISGN entries and in-body references) so they stay contiguous
-    from 0.
+def _parse_isgn_entries(dxbc):
+    """Return the full list of ``(name, sem_idx, sys_val, comp_ty, reg,
+    mask_rw)`` tuples for each ISGN entry in ``dxbc``. Names are
+    uppercased so template-vs-compiled comparisons don't fail on
+    ``SV_Position`` vs ``SV_POSITION``."""
+    for fc, off, size in dxbc_chunks(dxbc):
+        if fc != b'ISGN':
+            continue
+        body = dxbc[off + 8:off + 8 + size]
+        cnt, = struct.unpack_from('<I', body, 0)
+        out = []
+        for k in range(cnt):
+            eo = 8 + k * 24
+            name_off, sem_idx, sys_val, comp_ty, reg, mask_rw = \
+                struct.unpack_from('<IIIIII', body, eo)
+            end = body.index(b'\x00', name_off)
+            out.append((bytes(body[name_off:end]).upper(), sem_idx,
+                        sys_val, comp_ty, reg, mask_rw))
+        return out
+    return []
+
+
+def strip_unused_input_signature(dxbc, template_dxbc=None):
+    """Align a compiled shader's ISGN and input-register numbering with
+    the shipped template.
 
     Background: slangc's HLSL emits the full input struct even when the
     specialised entry point reads only a subset. fxc then dead-strips
     the unused ``dcl_input`` tokens in SHEX but leaves the corresponding
     ISGN entries in place and keeps the original v<N> register numbers
     for the kept inputs — so e.g. the HD pixel shader's SV_IsFrontFace
-    ends up on ``v9`` while r6..r8 are gaps. The shipped game shader
+    ends up on ``v9`` while v6..v8 are gaps. The shipped game shader
     has these registers packed contiguously (SV_IsFrontFace at ``v6``
-    when TEXCOORD4..6 aren't declared) and the engine rejects the
-    non-contiguous version.
+    when TEXCOORD4..6 aren't declared) and the engine rejects any
+    layout that doesn't match the shipped ISGN.
+
+    When ``template_dxbc`` is provided we use its ISGN as the
+    authoritative set of entries + register numbers — an entry is kept
+    whenever the template has a matching (semantic, semantic-index),
+    regardless of whether the specialised body happens to read it. The
+    remap is derived from the template's register assignments so the
+    output matches shipped byte-for-byte. Without a template we fall
+    back to the legacy heuristic (keep only registers the SHEX actually
+    declares, renumber contiguous from 0), which works when the compiled
+    body's declarations match shipped but over-prunes otherwise.
     """
     if dxbc[:4] != b'DXBC':
         return dxbc
@@ -282,31 +347,55 @@ def strip_unused_input_signature(dxbc):
     shex_body = dxbc[shex_off + 8:shex_off + 8 + shex_sz]
     used_in = _shex_declared_input_regs(shex_body)
 
-    # Build the old→new register remap. We keep relative ordering (sorted
-    # by original register index) so the operand swizzles emitted by fxc
-    # don't have to shuffle. Also include sys_val-only ISGN entries whose
-    # register lives in the SHEX even without an explicit dcl_input —
-    # otherwise the ISGN→SHEX linkage goes stale after renumber.
-    isgn_regs = set()
-    for fc, off, size in chunks:
-        if fc != b'ISGN':
-            continue
-        body = dxbc[off + 8:off + 8 + size]
-        cnt, = struct.unpack_from('<I', body, 0)
-        for k in range(cnt):
-            eo = 8 + k * 24
-            _, _, sys_val, _, reg, _ = struct.unpack_from('<IIIIII', body, eo)
-            if reg in used_in or sys_val != 0:
-                isgn_regs.add(reg)
-    keep_regs = sorted(isgn_regs)
-    remap = {old: new for new, old in enumerate(keep_regs)}
+    # Template-derived overrides: for each of my ISGN entries that has a
+    # matching (semantic, semantic-index) in the template, replace the
+    # tuple's reg, mask_rw (and comp_ty / sys_val) with the template's.
+    # Empty dict if no template is passed in.
+    template_overrides = {}
+    if template_dxbc is not None:
+        # Key by (name, sem_idx) so we can pull the template's metadata
+        # regardless of the slangc-side numbering.
+        tmpl_map = {(n, si): (sv, ct, r, mr)
+                    for (n, si, sv, ct, r, mr) in _parse_isgn_entries(template_dxbc)}
+        my_isgn = _parse_isgn_entries(dxbc)
+        remap = {}
+        keep_regs = set()
+        for name, sem_idx, sys_val, comp_ty, reg, mask_rw in my_isgn:
+            if (name, sem_idx) in tmpl_map:
+                t_sv, t_ct, t_reg, t_mr = tmpl_map[(name, sem_idx)]
+                remap[reg] = t_reg
+                keep_regs.add(reg)
+                template_overrides[reg] = (t_sv, t_ct, t_mr)
+            elif sys_val != 0 or reg in used_in:
+                # Template-less sys-val entries (shouldn't occur with a
+                # correct template) and body-referenced registers are
+                # kept in-place to avoid renumbering holes.
+                remap[reg] = reg
+                keep_regs.add(reg)
+    else:
+        # Legacy fallback: keep only what the body actually uses, then
+        # pack contiguous from 0.
+        keep_regs = set()
+        for fc, off, size in chunks:
+            if fc != b'ISGN':
+                continue
+            body = dxbc[off + 8:off + 8 + size]
+            cnt, = struct.unpack_from('<I', body, 0)
+            for k in range(cnt):
+                eo = 8 + k * 24
+                _, _, sys_val, _, reg, _ = struct.unpack_from('<IIIIII', body, eo)
+                if reg in used_in or sys_val != 0:
+                    keep_regs.add(reg)
+        sorted_regs = sorted(keep_regs)
+        remap = {old: new for new, old in enumerate(sorted_regs)}
 
     rebuilt = []
     changed = False
     for fc, off, size in chunks:
         raw = dxbc[off:off + 8 + size]
         if fc == b'ISGN':
-            new_body = _rewrite_sgn_body(raw[8:], used_in, remap=remap)
+            new_body = _rewrite_sgn_body(raw[8:], keep_regs, remap=remap,
+                                         overrides=template_overrides)
             if len(new_body) != size or new_body != raw[8:]:
                 raw = fc + struct.pack('<I', len(new_body)) + new_body
                 changed = True
@@ -510,22 +599,28 @@ def read_template(bls_path):
 
     middle_chunks = []
     stages = []
+    dxbcs = []
     prev = 0
     for i, end in enumerate(cum):
         size = end - prev
         if size == 0:
             middle_chunks.append(None)
             stages.append(None)
+            dxbcs.append(None)
         else:
             start = off_data + prev
             middle_chunks.append(bytes(data[start + 0x1C:start + 0x48]))
             stages.append(struct.unpack_from('<I', data, start + 0x18)[0])
+            dxbc_size = struct.unpack_from('<I', data, start + 0x48)[0]
+            dxbc_start = start + PERM_INNER_HEADER_SIZE
+            dxbcs.append(bytes(data[dxbc_start:dxbc_start + dxbc_size]))
         prev = end
 
     return {
         'num_perms': num_perms,
         'middle_chunks': middle_chunks,
         'stages': stages,
+        'dxbcs': dxbcs,
     }
 
 
@@ -566,7 +661,7 @@ def build_bls(template_path, slang_dir, num_perms, strip=False, verbose=False):
             dxbc = fp.read()
 
         dxbc = fix_dxbc_signatures(dxbc)
-        dxbc = strip_unused_input_signature(dxbc)
+        dxbc = strip_unused_input_signature(dxbc, tmpl['dxbcs'][i])
         if strip:
             dxbc = strip_dxbc_chunks(dxbc, {b'RDEF', b'STAT'})
         else:
@@ -751,7 +846,7 @@ def main():
                          'mtlfs/*.bls, mtlvs/*.bls (used when rebuilding Metal BLS)')
     ap.add_argument('--output', required=True, help='output directory for rebuilt BLS')
     ap.add_argument('--family', action='append', choices=list(FAMILY_MAP),
-                    help='limit to specific family (default: all 9)')
+                    help='limit to specific family (default: all)')
     ap.add_argument('--strip', action='store_true',
                     help='strip RDEF/STAT chunks from DXBC (match shipped chunk layout) '
                          'and recompute the DXBC hash')
@@ -767,7 +862,10 @@ def main():
     for fam in families:
         # ---------- DX (ps/, vs/) ----------
         stage_dir, bls_name, num_perms = FAMILY_MAP[fam]
-        template = os.path.join(args.templates, stage_dir, bls_name)
+        # `toon_hd_*` ships no dedicated BLS — fall back to the HD template
+        # for its resource/binding metadata while emitting toon_hd.bls.
+        template_name = TEMPLATE_OVERRIDE.get(fam, bls_name)
+        template = os.path.join(args.templates, stage_dir, template_name)
         slang_dir = os.path.join(dxbc_root, fam)
 
         if not os.path.isfile(template):
@@ -794,7 +892,8 @@ def main():
         if not has_metallibs(m_slang_dir):
             continue
 
-        m_template = os.path.join(args.templates, m_stage_dir, m_bls_name)
+        m_template_name = TEMPLATE_OVERRIDE.get(fam, m_bls_name)
+        m_template = os.path.join(args.templates, m_stage_dir, m_template_name)
         m_out_dir  = os.path.join(args.output, m_stage_dir)
         os.makedirs(m_out_dir, exist_ok=True)
         m_out_path = os.path.join(m_out_dir, m_bls_name)

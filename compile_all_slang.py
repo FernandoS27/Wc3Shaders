@@ -1,12 +1,13 @@
-"""Compile all permutations of all 6 shader entry points from the unified
+"""Compile all permutations of every shader entry point from the unified
 wc3_shaders Slang module, to one of several graphics-API targets.
 
 Runs independently of the current working directory — paths resolve
 relative to this script's location.
 
     --target {d3d11,d3d12,vulkan,opengl,metal,webgpu,all}  (default: d3d11)
-    --family {hd_vs,hd_ps,crystal_ps,sd_on_hd_vs,sd_on_hd_ps,
-              sd_highspec_vs,sd_classic_ps,all}
+    --family {hd_vs,hd_ps,toon_hd_vs,toon_hd_ps,crystal_ps,
+              sd_on_hd_vs,sd_on_hd_ps,sd_highspec_vs,sd_classic_ps,
+              water_vs,water_ps,all}
     --slangc PATH   explicit slangc.exe override
 """
 
@@ -22,10 +23,18 @@ from typing import Callable, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 SHADER = REPO_ROOT / "wc3_shaders" / "wc3_shaders.slang"
+CUSTOM_SHADER = REPO_ROOT / "custom_shaders" / "custom_shaders.slang"
+WC3_INCLUDE_DIR = REPO_ROOT / "wc3_shaders"
 OUT_BASE = REPO_ROOT / "slang_out"
+
+# Families whose entry points live in the custom_shaders module (which
+# imports wc3_shaders). These compile from CUSTOM_SHADER with an include
+# path that lets slangc resolve `import wc3_shaders;`.
+CUSTOM_FAMILIES = {"toon_hd_vs", "toon_hd_ps"}
 
 FAMILIES = (
     "hd_vs", "hd_ps", "crystal_ps",
+    "toon_hd_vs", "toon_hd_ps",
     "sd_on_hd_vs", "sd_on_hd_ps",
     "sd_highspec_vs", "sd_classic_ps",
     "water_vs", "water_ps",
@@ -111,10 +120,14 @@ class SweepResult:
 
 def invoke_slangc(entry: str, target: str, profile: str,
                   specialize: List[str], out_path: Path,
-                  extra: Optional[List[str]] = None) -> bool:
+                  shader_path: Path,
+                  extra: Optional[List[str]] = None,
+                  include_dirs: Optional[List[Path]] = None) -> bool:
     args = [resolve_slangc(), "-entry", entry]
     for t in specialize:
         args += ["-specialize", t]
+    for inc in include_dirs or []:
+        args += ["-I", str(inc)]
     args += [
         "-profile", profile,
         "-target", target,
@@ -123,7 +136,7 @@ def invoke_slangc(entry: str, target: str, profile: str,
     ]
     if extra:
         args += extra
-    args.append(str(SHADER))
+    args.append(str(shader_path))
     subprocess.run(args, capture_output=True, text=True)
     return out_path.exists() and out_path.stat().st_size > 0
 
@@ -142,11 +155,35 @@ def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
     profile = cfg[stage]
     extra = cfg.get("extra", [])
 
+    # Custom-shader families compile from their own module file with
+    # wc3_shaders on the include path so `import wc3_shaders;` resolves.
+    # The explicit -stage flag keeps slangc from trying to validate
+    # wc3_shaders' own entry points (vs_main, ps_main, …) against the
+    # current profile while it's being imported — without it the
+    # import pipeline emits all entry points in the module.
+    if family in CUSTOM_FAMILIES:
+        shader_path = CUSTOM_SHADER
+        include_dirs = [WC3_INCLUDE_DIR]
+        custom_extra = extra + [
+            "-stage", "fragment" if stage == "ps" else "vertex",
+            # Suppress slangc's attempt to validate wc3_shaders' own
+            # entry points (hd_vs, hd_ps, …) against our profile while
+            # it's being imported — they're re-scanned for capability
+            # checks by default and error because the profile only
+            # matches one stage.
+            "-ignore-capabilities",
+        ]
+    else:
+        shader_path = SHADER
+        include_dirs = None
+        custom_extra = extra
+
     for i in range(count):
         spec = mapper(i)
         out_path = out_dir / f"perm_{i:03d}.{ext}"
 
-        if not invoke_slangc(spec.entry, target, profile, spec.types, out_path, extra):
+        if not invoke_slangc(spec.entry, target, profile, spec.types, out_path,
+                             shader_path, custom_extra, include_dirs):
             result.fail += 1
             result.fail_list.append(f"perm_{i} ({spec.label})")
             continue
@@ -228,6 +265,20 @@ def map_hd_ps(idx: int) -> PermSpec:
         types=[fog, alpha, mat, iblS, evS, dpS, mrtS, dbgS],
         label=f"{fog}+{alpha}+{mat}+IBL={iblS}+EV={evS}+DP={dpS}+MRT={mrtS}+DBG={dbgS}",
     )
+
+
+def map_toon_hd_vs(idx: int) -> PermSpec:
+    # Toon-HD shares the HD vertex-format encoding 1:1 — same 144 perms,
+    # same specialisation types, different entry point.
+    spec = map_hd_vs(idx)
+    return PermSpec(entry="toon_vs_main", types=spec.types, label=spec.label)
+
+
+def map_toon_hd_ps(idx: int) -> PermSpec:
+    # Toon-HD shares the HD pixel-shader 9-bit feature encoding 1:1 —
+    # same 512 perms, same specialisation types, different entry point.
+    spec = map_hd_ps(idx)
+    return PermSpec(entry="toon_ps_main", types=spec.types, label=spec.label)
 
 
 def map_crystal_ps(idx: int) -> PermSpec:
@@ -382,6 +433,8 @@ def map_sd_classic_ps(idx: int) -> PermSpec:
 SWEEPS = [
     ("hd_vs",          144, map_hd_vs,          "vs"),
     ("hd_ps",          512, map_hd_ps,          "ps"),
+    ("toon_hd_vs",     144, map_toon_hd_vs,     "vs"),
+    ("toon_hd_ps",     512, map_toon_hd_ps,     "ps"),
     ("crystal_ps",     512, map_crystal_ps,     "ps"),
     ("sd_on_hd_vs",    144, map_sd_on_hd_vs,    "vs"),
     ("sd_on_hd_ps",    384, map_sd_on_hd_ps,    "ps"),

@@ -22,8 +22,8 @@ static const float3 FRESNEL_TARGET = float3(0, 0, 0.999000967);
 
 public struct FresnelOverlayResult
 {
-    float3 color;
-    float  alpha;
+    public float3 color;
+    public float  alpha;
 };
 
 // Standard fresnel overlay. Used by every single-layer HD material.
