@@ -26,7 +26,7 @@
 // is shared with the HD path unchanged — these effects are orthogonal to
 // the shading model and the engine routes them through the same state.
 
-implementing wc3_shaders;
+implementing custom_shaders;
 
 // =====================================================================
 // Toon lighting tunables

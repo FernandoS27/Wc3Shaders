@@ -12,15 +12,15 @@ implementing wc3_shaders;
 // scalar rather than a homogeneous coordinate.
 public struct PSInput
 {
-    float4 svPosition   : SV_Position;
-    float4 vertColor    : COLOR0;
-    float4 uv           : TEXCOORD0;
-    float4 worldPos     : TEXCOORD1;
-    float3 normalWS     : TEXCOORD2;
-    float4 tangentWS    : TEXCOORD3;
-    float4 shadowClip0  : TEXCOORD4;
-    float4 shadowClip1  : TEXCOORD5;
-    float4 shadowClip2  : TEXCOORD6;
+    public float4 svPosition   : SV_Position;
+    public float4 vertColor    : COLOR0;
+    public float4 uv           : TEXCOORD0;
+    public float4 worldPos     : TEXCOORD1;
+    public float3 normalWS     : TEXCOORD2;
+    public float4 tangentWS    : TEXCOORD3;
+    public float4 shadowClip0  : TEXCOORD4;
+    public float4 shadowClip1  : TEXCOORD5;
+    public float4 shadowClip2  : TEXCOORD6;
 };
 
 // HD pixel shader output. When the MRT path is disabled the specular and
@@ -35,9 +35,9 @@ public struct PSInput
 //   normal   = packed world-space normal (xyz) + pre-fog alpha (w)
 public struct PSOutput<let IS_MRT : bool, let HAS_COLOR : bool>
 {
-    Conditional<float4, HAS_COLOR> color    : SV_Target0;
-    Conditional<float4, IS_MRT>    specular : SV_Target1;
-    Conditional<float4, IS_MRT>    normal   : SV_Target2;
+    public Conditional<float4, HAS_COLOR> color    : SV_Target0;
+    public Conditional<float4, IS_MRT>    specular : SV_Target1;
+    public Conditional<float4, IS_MRT>    normal   : SV_Target2;
 };
 
 // SD classic pipeline pixel shader input. No normals or tangents because
@@ -45,10 +45,10 @@ public struct PSOutput<let IS_MRT : bool, let HAS_COLOR : bool>
 // already contains the lit result.
 public struct SDPSInput
 {
-    float4 svPosition : SV_Position;
-    float4 vertColor  : COLOR0;
-    float4 uv         : TEXCOORD0;
-    float3 worldPos   : TEXCOORD1;
+    public float4 svPosition : SV_Position;
+    public float4 vertColor  : COLOR0;
+    public float4 uv         : TEXCOORD0;
+    public float3 worldPos   : TEXCOORD1;
 };
 
 // Water pixel shader input. Matches `WaterVSOutput` slot-for-slot:
@@ -57,16 +57,16 @@ public struct SDPSInput
 // carries the per-object "up" axis used as the TBN tangent.
 public struct WaterPSInput
 {
-    float4 svPosition   : SV_Position;
-    float4 vertColor    : COLOR0;
-    float2 uv           : TEXCOORD0;
-    float3 worldPos     : TEXCOORD1;
-    float3 geomNormalWS : TEXCOORD3;
-    float4 upAxisWS     : TEXCOORD4;
+    public float4 svPosition   : SV_Position;
+    public float4 vertColor    : COLOR0;
+    public float2 uv           : TEXCOORD0;
+    public float3 worldPos     : TEXCOORD1;
+    public float3 geomNormalWS : TEXCOORD3;
+    public float4 upAxisWS     : TEXCOORD4;
 };
 
 // SD classic pipeline PS output. Single target; no MRT, no debug split.
 public struct SDPSOutput
 {
-    float4 color : SV_Target0;
+    public float4 color : SV_Target0;
 };

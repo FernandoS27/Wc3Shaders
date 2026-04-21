@@ -23,7 +23,14 @@ from typing import Callable, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 SHADER = REPO_ROOT / "wc3_shaders" / "wc3_shaders.slang"
+CUSTOM_SHADER = REPO_ROOT / "custom_shaders" / "custom_shaders.slang"
+WC3_INCLUDE_DIR = REPO_ROOT / "wc3_shaders"
 OUT_BASE = REPO_ROOT / "slang_out"
+
+# Families whose entry points live in the custom_shaders module (which
+# imports wc3_shaders). These compile from CUSTOM_SHADER with an include
+# path that lets slangc resolve `import wc3_shaders;`.
+CUSTOM_FAMILIES = {"toon_hd_vs", "toon_hd_ps"}
 
 FAMILIES = (
     "hd_vs", "hd_ps", "crystal_ps",
@@ -113,10 +120,14 @@ class SweepResult:
 
 def invoke_slangc(entry: str, target: str, profile: str,
                   specialize: List[str], out_path: Path,
-                  extra: Optional[List[str]] = None) -> bool:
+                  shader_path: Path,
+                  extra: Optional[List[str]] = None,
+                  include_dirs: Optional[List[Path]] = None) -> bool:
     args = [resolve_slangc(), "-entry", entry]
     for t in specialize:
         args += ["-specialize", t]
+    for inc in include_dirs or []:
+        args += ["-I", str(inc)]
     args += [
         "-profile", profile,
         "-target", target,
@@ -125,7 +136,7 @@ def invoke_slangc(entry: str, target: str, profile: str,
     ]
     if extra:
         args += extra
-    args.append(str(SHADER))
+    args.append(str(shader_path))
     subprocess.run(args, capture_output=True, text=True)
     return out_path.exists() and out_path.stat().st_size > 0
 
@@ -144,11 +155,35 @@ def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
     profile = cfg[stage]
     extra = cfg.get("extra", [])
 
+    # Custom-shader families compile from their own module file with
+    # wc3_shaders on the include path so `import wc3_shaders;` resolves.
+    # The explicit -stage flag keeps slangc from trying to validate
+    # wc3_shaders' own entry points (vs_main, ps_main, …) against the
+    # current profile while it's being imported — without it the
+    # import pipeline emits all entry points in the module.
+    if family in CUSTOM_FAMILIES:
+        shader_path = CUSTOM_SHADER
+        include_dirs = [WC3_INCLUDE_DIR]
+        custom_extra = extra + [
+            "-stage", "fragment" if stage == "ps" else "vertex",
+            # Suppress slangc's attempt to validate wc3_shaders' own
+            # entry points (hd_vs, hd_ps, …) against our profile while
+            # it's being imported — they're re-scanned for capability
+            # checks by default and error because the profile only
+            # matches one stage.
+            "-ignore-capabilities",
+        ]
+    else:
+        shader_path = SHADER
+        include_dirs = None
+        custom_extra = extra
+
     for i in range(count):
         spec = mapper(i)
         out_path = out_dir / f"perm_{i:03d}.{ext}"
 
-        if not invoke_slangc(spec.entry, target, profile, spec.types, out_path, extra):
+        if not invoke_slangc(spec.entry, target, profile, spec.types, out_path,
+                             shader_path, custom_extra, include_dirs):
             result.fail += 1
             result.fail_list.append(f"perm_{i} ({spec.label})")
             continue

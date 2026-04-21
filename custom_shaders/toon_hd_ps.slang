@@ -21,7 +21,7 @@
 //   IS_MRT            — also write the deferred-G-buffer targets.
 //   HAS_DEBUG_VIS     — debug visualisation enabled.
 
-implementing wc3_shaders;
+implementing custom_shaders;
 
 [shader("fragment")]
 public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> toon_ps_main<

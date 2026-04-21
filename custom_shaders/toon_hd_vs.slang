@@ -16,7 +16,7 @@
 //   TVF           — IVertexFormat (which optional attribs are live).
 //   HAS_SHADOWS   — whether the three cascade clip coords need computing.
 
-implementing wc3_shaders;
+implementing custom_shaders;
 
 [shader("vertex")]
 public VSOutput<HAS_SHADOWS> toon_vs_main<

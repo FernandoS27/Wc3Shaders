@@ -15,13 +15,13 @@
 
 implementing wc3_shaders;
 
-static const float PI              = 3.14159274;
-static const float INV_PI          = 0.318309873;
-static const float LOG2E           = 1.44269502;   // 1 / ln(2), used by exp2-based fog.
-static const float SAFE_EPS        = 0.00100000005; // Divide-by-zero guard in hue normalization.
-static const float POINT_EPS       = 0.000500000024; // Avoids infinite gain at distance 0.
-static const float NDF_VAR_CLAMP   = 0.180000007;  // Max geometric roughness inflation per pixel.
-static const float SCHLICK_K_FACTOR = 0.125;       // k = (roughness+1)² / 8 → (r+1)²·0.125.
+public static const float PI              = 3.14159274;
+public static const float INV_PI          = 0.318309873;
+public static const float LOG2E           = 1.44269502;   // 1 / ln(2), used by exp2-based fog.
+public static const float SAFE_EPS        = 0.00100000005; // Divide-by-zero guard in hue normalization.
+public static const float POINT_EPS       = 0.000500000024; // Avoids infinite gain at distance 0.
+public static const float NDF_VAR_CLAMP   = 0.180000007;  // Max geometric roughness inflation per pixel.
+public static const float SCHLICK_K_FACTOR = 0.125;       // k = (roughness+1)² / 8 → (r+1)²·0.125.
 
 // GGX (Trowbridge-Reitz) normal distribution function.
 // D(h) = α⁴ / (π · (NdotH² · (α⁴ − 1) + 1)²), with α = roughness².

@@ -35,10 +35,10 @@ static const float BLIZZARD_AMBIENT_SPLIT_LOWER = 0.324999988;
 
 public struct IBLSampleResult
 {
-    float3 diffuseIrradiance;
-    float3 specularRadiance;
-    float2 brdfLUT;
-    float  isActive;   // 0 when no probes are bound, 1 otherwise.
+    public float3 diffuseIrradiance;
+    public float3 specularRadiance;
+    public float2 brdfLUT;
+    public float  isActive;   // 0 when no probes are bound, 1 otherwise.
 };
 
 // Sample both the "from" and "to" IBL probes, blend them, and fetch the

@@ -30,7 +30,7 @@ static const float  EDGE_DETECT_SCALE = 10.0;        // Sharpness of the silhoue
 // the packed shape.
 public struct CloakResult
 {
-    float4 colorAlpha;
+    public float4 colorAlpha;
 };
 
 // Standard cloak: tint the lit color toward the cyan CLOAK_TINT based

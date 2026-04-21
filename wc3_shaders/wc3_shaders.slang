@@ -30,9 +30,6 @@
 //
 //   hd_ps        — HD pipeline pixel shader (PBR / IBL).
 //   hd_vs        — HD pipeline vertex shader.
-//   toon_hd_ps   — HD pipeline pixel shader with Breath-of-the-Wild
-//                   style 2-band cel shading (same inputs as hd_ps).
-//   toon_hd_vs   — Vertex shader paired with toon_hd_ps (mirrors hd_vs).
 //   crystal_ps   — HD refractive / transparent variant (gem / glass props).
 //   sd_on_hd_ps  — SD assets rendered through the HD pipeline (PS).
 //   sd_on_hd_vs  — SD assets rendered through the HD pipeline (VS).
@@ -69,7 +66,6 @@ __include "effects/crystal_refract";
 __include "ps/ps_depth_prepass";
 __include "ps/ps_ibl";
 __include "ps/ps_standard";
-__include "ps/ps_toon";
 __include "ps/ps_post";
 
 // Crystal pixel-shader bodies (refractive variant of the HD pipeline).
@@ -97,8 +93,6 @@ __include "vs/sd_vs_lighting";
 // Entry points.
 __include "hd_ps";
 __include "hd_vs";
-__include "toon_hd_ps";
-__include "toon_hd_vs";
 __include "crystal_ps";
 __include "sd_on_hd_ps";
 __include "sd_on_hd_vs";
