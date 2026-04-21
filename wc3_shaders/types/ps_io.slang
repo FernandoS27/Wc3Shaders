@@ -70,3 +70,13 @@ public struct SDPSOutput
 {
     public float4 color : SV_Target0;
 };
+
+// Tonemap pixel shader input. Full-screen pass — only a UV is consumed;
+// `svPosition` is declared so the ISGN still contains the SV_POSITION
+// entry expected by the shipped shader signature, even though the body
+// never reads it.
+public struct TonemapPSInput
+{
+    public float4 svPosition : SV_Position;
+    public float2 uv         : TEXCOORD0;
+};

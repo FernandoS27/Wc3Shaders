@@ -7,7 +7,7 @@ relative to this script's location.
     --target {d3d11,d3d12,vulkan,opengl,metal,webgpu,all}  (default: d3d11)
     --family {hd_vs,hd_ps,toon_hd_vs,toon_hd_ps,crystal_ps,
               sd_on_hd_vs,sd_on_hd_ps,sd_highspec_vs,sd_classic_ps,
-              water_vs,water_ps,all}
+              water_vs,water_ps,tonemap_ps,all}
     --slangc PATH   explicit slangc.exe override
 """
 
@@ -38,6 +38,7 @@ FAMILIES = (
     "sd_on_hd_vs", "sd_on_hd_ps",
     "sd_highspec_vs", "sd_classic_ps",
     "water_vs", "water_ps",
+    "tonemap_ps",
 )
 
 # Stage → profile per target + output file extension and optional extra
@@ -402,6 +403,11 @@ def map_water_ps(idx: int) -> PermSpec:
     return PermSpec(entry="water_ps_main", types=[fog], label=fog)
 
 
+def map_tonemap_ps(idx: int) -> PermSpec:
+    # Single permutation — HDR→LDR resolve has no feature axes.
+    return PermSpec(entry="tonemap_ps_main", types=[], label="(only)")
+
+
 def map_sd_classic_ps(idx: int) -> PermSpec:
     low     = idx & 7
     t0stage = (idx // 8) % 5
@@ -442,6 +448,7 @@ SWEEPS = [
     ("sd_classic_ps",  200, map_sd_classic_ps,  "ps"),
     ("water_vs",         1, map_water_vs,       "vs"),
     ("water_ps",         4, map_water_ps,       "ps"),
+    ("tonemap_ps",       1, map_tonemap_ps,     "ps"),
 ]
 
 

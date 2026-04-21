@@ -61,6 +61,7 @@ FAMILY_MAP = {
     'sd_classic_ps':  ('ps', 'sd.bls',          200),
     'sd_on_hd_ps':    ('ps', 'sd_on_hd.bls',    384),
     'water_ps':       ('ps', 'water.bls',         4),
+    'tonemap_ps':     ('ps', 'tonemap.bls',       1),
     'hd_vs':          ('vs', 'hd.bls',          144),
     'toon_hd_vs':     ('vs', 'toon_hd.bls',     144),
     'sd_highspec_vs': ('vs', 'sd_highspec.bls', 162),
@@ -83,6 +84,7 @@ METAL_FAMILY_MAP = {
     'sd_on_hd_vs':    ('mtlvs', 'sd_on_hd.bls',    144),
     'water_vs':       ('mtlvs', 'water.bls',         1),
     'water_ps':       ('mtlfs', 'water.bls',         4),
+    'tonemap_ps':     ('mtlfs', 'tonemap.bls',       1),
 }
 
 # Families that have no shipped BLS of their own and must clone a
