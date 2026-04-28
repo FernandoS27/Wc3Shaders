@@ -308,6 +308,135 @@ public SamplerState s_waterDepth  : register(s1);
 public SamplerState s_waterNormal : register(s2);
 public SamplerState s_waterProbe  : register(s3);
 
+// Per-draw constants for the PopcornFX vertex shader (b2). Aliases
+// the same buffer as `vsCB2` (the engine binds them at the same
+// register slot) but exposes only the fields the popcorn pipeline
+// actually consumes:
+//
+//   world         @ 0x040 — particle emitter's object → world transform.
+//                           Lives at the same offset as VSPerDraw.worldView,
+//                           because the engine binds the world matrix here
+//                           when running the particle pipeline (the HD
+//                           pipeline binds the worldView product instead).
+//   worldViewProj @ 0x080 — particle emitter's object → clip transform.
+//   popcornScale  @ 0x0C4 — scalar emitter scale applied to the local-
+//                           space position before any matrix transform
+//                           (i.e. at the .y slot of cb2[12]).
+public struct PopcornVSPerDraw
+{
+    public float4x4 _padCB0;          // cb2[0..3] — unused by the popcorn VS
+    public float4x4 world;            // cb2[4..7]
+    public float4x4 worldViewProj;    // cb2[8..11]
+    public float    _padTime;         // cb2[12].x  (the HD pipeline's `effectTime`)
+    public float    popcornScale;     // cb2[12].y
+    public float2   _padHeight;       // cb2[12].zw (HD's clipHeight / underWater)
+};
+
+public ConstantBuffer<PopcornVSPerDraw> popcornVsCB2 : register(b2);
+
+// Per-draw constants for the PopcornFX pixel shader (b2). Aliases
+// the same register slot as the HD `psCB2` (and `waterPsCB2`) — the
+// engine reuses the same buffer slot for whichever pipeline is
+// active, and slangc only emits the binding the live entry point
+// actually references.
+//
+// Slot map (recovered from the original BLS PS perms; see
+// re_shaders/popcornfx/popcorn_ps.hlsl for the per-feature comments):
+//
+//   cb2[0]          — unused by the popcorn PS
+//   cb2[1].xyz      — fog start / end / density (FOG_*)
+//   cb2[2].xyz      — fog color                  (FOG_*)
+//   cb2[3..6]       — unused (HD's worldView slot)
+//   cb2[7..10]      — per-particle world basis   (LIT IBL)
+//   cb2[11..14]     — world → clip matrix        (SOFT_PARTICLES,
+//                                                 MOTION_PASS, LIT IBL)
+//   cb2[15]         — depth-buffer UV remap (.xy = scale, .zw = bias)
+//   cb2[16].x       — depth-fade scale            (SOFT_PARTICLES,
+//                                                 MOTION_PASS)
+//   cb2[17..18]     — unused
+//   cb2[19].x       — IBL `cubeFrom` roughness-to-mip multiplier
+//   cb2[19].y       — IBL `cubeTo`   roughness-to-mip multiplier
+//   cb2[19].z       — IBL cubemap blend (0 → cubeFrom, 1 → cubeTo)
+//   cb2[20].z       — analytic light count       (LIT)
+//   cb2[20].w       — "use smoothed normal" flag (LIT specular AA)
+//   cb2[21..52]     — analytic light array (8 lights × 4 float4
+//                     stride, sharing layout with HD's `ShaderLight`).
+//                     lights[0] does double duty as the IBL ambient /
+//                     base-material driver — its `.ambient` is added
+//                     to the IBL diffuse contribution and its
+//                     `.diffuse` is the IBL tint.
+public struct PopcornPSPerDraw
+{
+    public float4   _pad0;                                  // cb2[0]
+    public float    fogStart;       public float fogEnd;
+    public float    fogDensity;     public float _p1;       // cb2[1]
+    public float4   fogColor;                               // cb2[2]
+    public float4x4 _padCB3;                                // cb2[3..6]
+
+    // The following two "matrix" slots are declared as raw float4
+    // arrays rather than `float4x4` because both are addressed with
+    // non-contiguous component swizzles (.xyw / .xzy) and slang's
+    // matrix-row accessors lower those to per-scalar loads instead
+    // of a single vector load + swizzle. Storing them as raw arrays
+    // matches the original engine's `float4 cb2[N]` access pattern.
+    //
+    //   particleBasis[0..2] — per-particle world basis used by the
+    //                          LIT IBL block to rotate worldPos and
+    //                          worldNormal into the cubemap-local
+    //                          frame (.xzy swizzle).
+    //   worldToClip[0..3]   — world → clip (3×4 affine, using the
+    //                          .xyw lanes of each row; .z is unused).
+    public float4   particleBasis[4];                       // cb2[7..10]
+    public float4   worldToClip[4];                         // cb2[11..14]
+
+    public float4   depthUVRemap;                           // cb2[15]
+    public float    depthFadeScale; public float3 _p16;     // cb2[16]
+    public float4   _pad17;                                 // cb2[17]
+    public float4   _pad18;                                 // cb2[18]
+    public float    iblMipFrom;     public float iblMipTo;
+    public float    iblBlend;       public float _p19;      // cb2[19]
+    public float2   _pad20_xy;
+    public float    lightCount;     public float useSmoothedNormal; // cb2[20]
+    public ShaderLight lights[8];                           // cb2[21..52]
+};
+
+public ConstantBuffer<PopcornPSPerDraw> popcornPsCB2 : register(b2);
+
+// Popcorn pixel-shader textures. Slot ordering matches the engine
+// bindings recovered from the BLS perms:
+//   t0  — diffuse / motion-source (sampled with the per-mode UV);
+//         in MOTION_PASS its .xy is the encoded motion vector.
+//   t1  — alpha-remap LUT (1D ramp in U, random scalar in V).
+//   t2  — packed normal map (LIT only).
+//   t3  — smoothness (.y) + metallic (.z) (LIT only).
+//   t4  — scene depth (SOFT_PARTICLES color-pass fade and the
+//         MOTION_PASS depth-discard test).
+//   t13 — IBL diffuse-irradiance + spec cubemap "from" probe (LIT).
+//   t14 — IBL spec cubemap "to" probe (LIT) — blended by iblBlend.
+//   t15 — split-sum BRDF integration LUT (LIT).
+//
+// Several of these aliases share register slots with the HD bindings
+// declared above (e.g. t13/t14/t15 are also used by the HD IBL path);
+// slangc only emits the bindings the active entry actually
+// references, so the duplicate declarations are harmless.
+public Texture2D<float4>        t_popcornDiffuse  : register(t0);
+public Texture2D<float4>        t_popcornAlphaLut : register(t1);
+public Texture2D<float4>        t_popcornNormal   : register(t2);
+public Texture2D<float4>        t_popcornSmoothMet: register(t3);
+public Texture2D<float4>        t_popcornDepth    : register(t4);
+public TextureCubeArray<float4> t_popcornCubeFrom : register(t13);
+public TextureCubeArray<float4> t_popcornCubeTo   : register(t14);
+public Texture2D<float4>        t_popcornBrdfLut  : register(t15);
+
+public SamplerState s_popcornDiffuse  : register(s0);
+public SamplerState s_popcornAlphaLut : register(s1);
+public SamplerState s_popcornNormal   : register(s2);
+public SamplerState s_popcornSmoothMet: register(s3);
+public SamplerState s_popcornDepth    : register(s4);
+public SamplerState s_popcornCubeFrom : register(s13);
+public SamplerState s_popcornCubeTo   : register(s14);
+public SamplerState s_popcornBrdfLut  : register(s15);
+
 // Per-draw constants for the tonemap pixel shader (b1). The engine
 // only uploads a single 16-byte slot — the linear exposure multiplier
 // applied to the HDR scene color before the ACES filmic curve — but

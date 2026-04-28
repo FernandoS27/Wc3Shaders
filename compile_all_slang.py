@@ -403,6 +403,107 @@ def map_tonemap_ps(idx: int) -> PermSpec:
     return PermSpec(entry="tonemap_ps_main", types=[], label="(only)")
 
 
+def map_popcorn_vs(idx: int) -> PermSpec:
+    # 72 perms = 9 outer blocks × 8 inner bits.
+    #   inner bits (0..7):
+    #     bit 0 — HAS_RANDOM
+    #     bit 1 — HAS_VC
+    #     bit 2 — HAS_NT
+    #   outer = mode_idx * 3 + uv_variant   (mode 0..2, variant 0..2):
+    #     mode 0 = basic, 1 = billboard, 2 = atlas
+    #     variant 0 = no UV (collapses any mode to PopcornNoUV)
+    #     variant 1/2 = UV stream bound (the engine compiles two
+    #                   redundant variants per mode — they map to the
+    #                   same Slang specialisation here).
+    inner    = idx & 7
+    outer    = idx // 8
+    mode_idx = outer // 3
+    uv_var   = outer %  3
+
+    if uv_var == 0:
+        mode = "PopcornNoUV"
+    elif mode_idx == 0:
+        mode = "PopcornBasicUV"
+    elif mode_idx == 1:
+        mode = "PopcornBillboard"
+    else:
+        mode = "PopcornAtlas"
+
+    has_rand = "true" if (inner & 1) else "false"
+    has_vc   = "true" if (inner & 2) else "false"
+    has_nt   = "true" if (inner & 4) else "false"
+
+    return PermSpec(
+        entry="popcorn_vs_main",
+        types=[mode, has_rand, has_vc, has_nt],
+        label=f"{mode}+R={has_rand}+VC={has_vc}+NT={has_nt}",
+    )
+
+
+def map_popcorn_ps(idx: int) -> PermSpec:
+    # 1152 perms = 9 outer blocks × 128 inner bits.
+    #   inner bits (0..127):
+    #     bit 0 (0x01) — HAS_GBUFFER         (COLOR pass only)
+    #     bit 1 (0x02) — FOG_LINEAR          (COLOR pass only)
+    #     bit 2 (0x04) — FOG_EXP             (COLOR pass only;
+    #                                         set with bit 1 → FogExp2)
+    #     bit 3 (0x08) — HAS_SOFT_PARTICLES  (both passes)
+    #     bit 4 (0x10) — HAS_ALPHA_LUT       (COLOR pass only)
+    #     bit 5 (0x20) — HAS_VC              (both passes)
+    #     bit 6 (0x40) — HAS_LIT             (COLOR pass only)
+    #
+    #   outer (0..8) = mode_idx * 3 + uv_variant:
+    #     mode 0 = basic, 1 = billboard, 2 = atlas
+    #     variant 0 = no UV         → PopcornNoUV       (COLOR pass)
+    #     variant 1 = COLOR pass    → PopcornBasicUV / Billboard / Atlas
+    #     variant 2 = MOTION pass   → same modes, IS_MOTION_PASS = true
+    #
+    # Note: many bit combinations collapse semantically (e.g. all the
+    # COLOR-pass-only bits are no-ops in MOTION_PASS) but the engine
+    # still compiles every variant so its perm-table stays a fixed grid.
+    # We mirror that 1:1 here so the Slang specialisations line up
+    # perm-for-perm with the original BLS bundle.
+    inner    = idx & 0x7F
+    outer    = idx // 128
+    mode_idx = outer // 3
+    uv_var   = outer %  3
+
+    if uv_var == 0:
+        mode = "PopcornNoUV"
+    elif mode_idx == 0:
+        mode = "PopcornBasicUV"
+    elif mode_idx == 1:
+        mode = "PopcornBillboard"
+    else:
+        mode = "PopcornAtlas"
+
+    is_motion = "true" if uv_var == 2 else "false"
+
+    fogL = bool(inner & 0x02)
+    fogE = bool(inner & 0x04)
+    if fogL and fogE:
+        fog = "FogExp2"
+    elif fogL:
+        fog = "FogLinear"
+    elif fogE:
+        fog = "FogExponential"
+    else:
+        fog = "FogNone"
+
+    has_gbuf = "true" if (inner & 0x01) else "false"
+    has_sp   = "true" if (inner & 0x08) else "false"
+    has_alut = "true" if (inner & 0x10) else "false"
+    has_vc   = "true" if (inner & 0x20) else "false"
+    has_lit  = "true" if (inner & 0x40) else "false"
+
+    return PermSpec(
+        entry="popcorn_ps_main",
+        types=[mode, fog, is_motion, has_gbuf, has_sp, has_alut, has_vc, has_lit],
+        label=(f"{mode}+M={is_motion}+{fog}+G={has_gbuf}+SP={has_sp}"
+               f"+ALUT={has_alut}+VC={has_vc}+LIT={has_lit}"),
+    )
+
+
 def map_sd_classic_ps(idx: int) -> PermSpec:
     low     = idx & 7
     t0stage = (idx // 8) % 5
@@ -446,6 +547,8 @@ MAPPERS: dict[str, Callable[[int], PermSpec]] = {
     "sd_classic_ps":  map_sd_classic_ps,
     "water_vs":       map_water_vs,
     "water_ps":       map_water_ps,
+    "popcorn_vs":     map_popcorn_vs,
+    "popcorn_ps":     map_popcorn_ps,
     "tonemap_ps":     map_tonemap_ps,
 }
 
