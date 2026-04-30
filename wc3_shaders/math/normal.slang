@@ -33,9 +33,15 @@ public float3 decodeNormalMap(float3 texXYW)
 // swizzles with any downstream math. tangentSign (tangentWS.w) comes
 // from the VS and encodes handedness to keep the basis consistent
 // across mirrored UV islands.
+//
+// Operand order matters: this is cross(normal, tangent), matching the
+// retail DXBC. Swapping the two terms below would produce
+// cross(tangent, normal) = -cross(normal, tangent), which combined with
+// the same tangentSign convention from the VS gives a sign-flipped
+// bitangent and wrong world normals on any non-flat normal-map texel.
 public float3 tangentToWorld(float3 tsNormal, float3 tangentWS, float3 normalWS, float tangentSign)
 {
-    float3 bt = tangentWS.yzx * normalWS.zxy - normalWS.yzx * tangentWS.zxy;
+    float3 bt = normalWS.yzx * tangentWS.zxy - tangentWS.yzx * normalWS.zxy;
     bt *= tangentSign;
     float3 wn = tsNormal.x * tangentWS + tsNormal.y * bt + tsNormal.z * normalWS;
     return normalize(wn);

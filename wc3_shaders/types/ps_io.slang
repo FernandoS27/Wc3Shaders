@@ -80,3 +80,64 @@ public struct TonemapPSInput
     public float4 svPosition : SV_Position;
     public float2 uv         : TEXCOORD0;
 };
+
+// PopcornFX pixel shader input. Mirrors the live members of
+// `PopcornVSOutput` slot-for-slot (the VS side gates each slot with
+// `Conditional<>`, so unwritten slots arrive here with undefined
+// contents — the entry guards every read with the matching policy
+// flag).
+//
+// Slot map:
+//
+//   SV_Position   svPosition
+//   COLOR0        vertColor      — read when HAS_VC
+//   TEXCOORD0     uv             — read when TMode.hasUV; basic and
+//                                  billboard use only .xy, atlas
+//                                  reads .xyzw
+//   TEXCOORD1     slot1          — billboard: per-particle UV
+//                                  scale/bias (.xyzw); atlas: life-
+//                                  ratio fractional part in .x
+//   TEXCOORD2     uvAxis         — billboard: per-cell two-triangle
+//                                  scales (.xyzw)
+//   TEXCOORD3     random         — read when HAS_ALPHA_REMAP_LUT
+//                                  (.x is the per-particle random)
+//   TEXCOORD4     normalWS       — read when HAS_LIT
+//   TEXCOORD5     tangentWS      — read when HAS_LIT (.w = handedness)
+//   TEXCOORD7     worldPos
+//
+// The popcorn pipeline carries `worldPos.xyz` only — the .w fog-depth
+// channel HD piggybacks on the same slot doesn't exist here (popcorn
+// fog reads `worldPos.z` directly).
+public struct PopcornPSInput
+{
+    public float4 svPosition : SV_Position;
+    public float4 vertColor  : COLOR0;
+    public float4 uv         : TEXCOORD0;
+    public float4 slot1      : TEXCOORD1;
+    public float4 uvAxis     : TEXCOORD2;
+    public float4 random     : TEXCOORD3;
+    public float3 normalWS   : TEXCOORD4;
+    public float4 tangentWS  : TEXCOORD5;
+    public float3 worldPos   : TEXCOORD7;
+};
+
+// PopcornFX pixel shader output. Single-target colour pass by default;
+// the deferred g-buffer payload (a packed depth + a default material
+// slot, both matching the engine's deferred composition convention)
+// is gated by `HAS_GBUFFER` and compiled out otherwise via
+// `Conditional`.
+//
+//   color        — final RGBA. In MOTION_PASS, .xy carries the
+//                  bias-encoded motion vector and .zw is (0, 1).
+//   depthRT      — .x = view-space depth, .yzw = (0, 0, 1) packed
+//                  normal hint (deferred resolve reconstructs the
+//                  particle normal from the quad).
+//   materialRT   — .xyz = (1, 0.5, 0.5) default material params,
+//                  .w   = pre-SP-fade surface alpha (the deferred
+//                  resolver reapplies its own alpha blending).
+public struct PopcornPSOutput<let HAS_GBUFFER : bool>
+{
+    public float4                              color      : SV_Target0;
+    public Conditional<float4, HAS_GBUFFER>    depthRT    : SV_Target1;
+    public Conditional<float4, HAS_GBUFFER>    materialRT : SV_Target2;
+};

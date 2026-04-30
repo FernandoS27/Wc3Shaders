@@ -89,3 +89,99 @@ public struct WaterVSOutput
     public float3 normalWS    : TEXCOORD3;
     public float4 upAxisWS    : TEXCOORD4;
 };
+
+// PopcornFX vertex stream. Mirrors the convention used by `VSInput<TVF>`:
+// every possible attribute is declared up-front (so the input-element
+// layout the engine binds stays fixed across perms), and the entry
+// shader gates per-feature processing on the policy types — the dead
+// loads compile out cleanly under specialization.
+//
+// Slot map (recovered from the original BLS input signatures):
+//
+//   ATTR0  pivot-blended position
+//   ATTR1  object-space normal              (live when HAS_NT)
+//   ATTR2  per-vertex RGBA color            (live when HAS_VC)
+//   ATTR3  primary UV                       (live when TMode.hasUV;
+//                                            BILLBOARD declares it but
+//                                            ignores it — the engine
+//                                            still binds the stream)
+//   ATTR4  BILLBOARD: axis0 (.xyzw) /
+//          ATLAS:     uv1   (.xy)
+//   ATTR5  BILLBOARD: axis1 (.xyzw) /
+//          ATLAS:     lifeRatio (.x)
+//   ATTR6  per-particle random scalar       (live when HAS_RANDOM
+//                                            and TMode.hasUV — the
+//                                            engine never binds it
+//                                            without a UV stream to
+//                                            attach random to)
+//   ATTR7  object-space tangent + handedness in .w  (live when HAS_NT)
+//   ATTR8  particle pivot (.xyz) + per-vertex blend weight (.w)
+//   SV_VertexID                              (read only by BILLBOARD)
+//
+// ATTR4/ATTR5 are declared as float4 to cover the BILLBOARD axis
+// vectors; the ATLAS path uses the .xy / .x lanes of the same slot.
+// The two interpretations are unwrapped by `popcornUv1FromSlot4` and
+// `popcornLifeFromSlot5` in popcorn_vs.slang to keep the entry body
+// readable.
+public struct PopcornVSInput
+{
+    public float3 position    : ATTR0;
+    public float3 normal      : ATTR1;
+    public float4 vertColor   : ATTR2;
+    public float2 uv0         : ATTR3;
+    public float4 modeSlot4   : ATTR4;
+    public float4 modeSlot5   : ATTR5;
+    public float  random      : ATTR6;
+    public float4 tangent     : ATTR7;
+    public float4 pivot       : ATTR8;
+    public uint   vertexID    : SV_VertexID;
+};
+
+// PopcornFX VS → PS payload. The conditional fields mirror the live
+// per-perm slots so the wire signature only carries what the active
+// permutation actually populates.
+//
+// Slot map:
+//
+//   SV_Position    clipPos       — always
+//   COLOR0         color         — HAS_VC
+//   TEXCOORD0      uv (float4)   — TMode.hasUV (basic & billboard
+//                                  use only the .xy lanes; ATLAS
+//                                  populates the full .xyzw — the
+//                                  PS reads .xy / .xyzw as needed)
+//   TEXCOORD1      slot1Out      — BILLBOARD (carries axis0,  .xyzw) /
+//                                  ATLAS     (carries lifeOut, only
+//                                  .x is read by the PS)
+//   TEXCOORD2      axis1Out      — BILLBOARD only (.xyzw)
+//   TEXCOORD3      randomOut     — HAS_RANDOM (& hasUV)
+//   TEXCOORD4      normalWS      — HAS_NT
+//   TEXCOORD5      tangentWS     — HAS_NT
+//   TEXCOORD7      worldPos      — always
+//
+// TEXCOORD0 / TEXCOORD1 are always declared as float4 when active —
+// the BILLBOARD axis vectors are the widest interpretation, so packing
+// every mode through them keeps the slot count at one Conditional
+// field per semantic (downstream HLSL emission rejects multiple
+// Conditional fields sharing a semantic).
+public struct PopcornVSOutput<
+    TMode : IPopcornMode,
+    let HAS_RANDOM : bool,
+    let HAS_VC     : bool,
+    let HAS_NT     : bool>
+{
+    public float4 position : SV_Position;
+
+    public Conditional<float4, HAS_VC> color : COLOR0;
+
+    public Conditional<float4, TMode.hasUV>       uv       : TEXCOORD0;
+    public Conditional<float4, TMode.isBillboard> axis0Out : TEXCOORD1;
+    public Conditional<float4, TMode.isAtlas>     lifeOut  : TEXCOORD1;
+    public Conditional<float4, TMode.isBillboard> axis1Out : TEXCOORD2;
+
+    public Conditional<float4, HAS_RANDOM> randomOut : TEXCOORD3;
+
+    public Conditional<float3, HAS_NT> normalWS  : TEXCOORD4;
+    public Conditional<float4, HAS_NT> tangentWS : TEXCOORD5;
+
+    public float3 worldPos : TEXCOORD7;
+};

@@ -35,6 +35,11 @@
 //   sd_on_hd_vs  — SD assets rendered through the HD pipeline (VS).
 //   sd_highspec_vs — SD pipeline per-vertex-lit VS.
 //   sd_classic_ps — SD pipeline fixed-function texture-stage PS.
+//   popcorn_vs    — PopcornFX particle vertex shader (4 modes ×
+//                   3 inner-bit feature axes).
+//   popcorn_ps    — PopcornFX particle pixel shader: COLOR pass
+//                   (lit / diffuse / fog / soft-particles / alpha-LUT
+//                   / gbuffer) and MOTION pass (motion-vector encode).
 
 module wc3_shaders;
 
@@ -55,6 +60,7 @@ __include "interfaces/alpha_test";
 __include "interfaces/skinning";
 __include "interfaces/vertex_format";
 __include "interfaces/texture_stage";
+__include "interfaces/popcorn_mode";
 
 // Higher-level visual effects used by the PS bodies.
 __include "effects/cloak";
@@ -86,6 +92,9 @@ __include "ps/sd_classic_ps_body";
 // Water pixel-shader body.
 __include "ps/water_ps_body";
 
+// PopcornFX pixel-shader body.
+__include "ps/popcorn_ps_body";
+
 // Tonemap pixel-shader body.
 __include "ps/tonemap_ps_body";
 
@@ -103,4 +112,6 @@ __include "sd_highspec_vs";
 __include "sd_classic_ps";
 __include "water_vs";
 __include "water_ps";
+__include "popcorn_vs";
+__include "popcorn_ps";
 __include "tonemap_ps";
