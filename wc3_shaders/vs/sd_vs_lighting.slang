@@ -11,13 +11,13 @@
 
 implementing wc3_shaders;
 
-// SD attenuation matches the original FF pipeline: linear falloff with
-// a small constant term. The 0.0005 coefficient reproduces the legacy
-// D3D9 attenuation that shipped with the classic engine (an emulated
-// `attenuation1` with the same magnitude as the retail shader).
-public float sdAttenuation(float dist)
+// SD attenuation matches the retail SD highspec VS exactly: 1/(1 + k*d²),
+// i.e. quadratic falloff on squared distance — not linear-in-distance.
+// The 0.000500000024 coefficient is the engine's `attenuation2` value;
+// taking dSq directly avoids the sqrt the linear form would have needed.
+public float sdAttenuation(float distSq)
 {
-    return 1.0 / (1.0 + 0.000500000024 * dist);
+    return 1.0 / (1.0 + 0.000500000024 * distSq);
 }
 
 // Accumulate Lambertian diffuse and ambient contributions from up to
@@ -39,12 +39,13 @@ public float3 sdComputePerVertexLighting<let NUM_LIGHTS : int>(
 
         if (lights[i].type > 0.0)
         {
-            // Point light: direction toward the light + linear falloff.
+            // Point light: unit direction toward the light + quadratic
+            // falloff on squared distance (see sdAttenuation).
             float3 delta = lights[i].position - worldPos;
             float  dSq = dot(delta, delta);
             float  d = sqrt(dSq);
             lightVec = delta / d;
-            atten    = sdAttenuation(d);
+            atten    = sdAttenuation(dSq);
         }
         else
         {
