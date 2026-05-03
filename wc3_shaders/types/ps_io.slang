@@ -81,6 +81,76 @@ public struct TonemapPSInput
     public float2 uv         : TEXCOORD0;
 };
 
+// Terrain pixel shader input. Mirrors `TerrainVSOutput` slot-for-slot.
+// The cascade clip slots are declared unconditionally — slangc's PS
+// input layout is fixed at the struct level, but fxc DCEs the
+// `dcl_input_ps` for unread slots on the non-shadow perms (matching
+// what every other slang PS in this module does).
+public struct TerrainPSInput
+{
+    public nointerpolation uint4 boneIDs : TEXCOORD7;
+    public float4 svPosition   : SV_Position;
+    public float4 color        : COLOR0;
+    public float4 texCoord     : TEXCOORD0;
+    public float4 worldPos     : TEXCOORD1;
+    public float3 worldNormal  : TEXCOORD2;
+    public float4 worldTangent : TEXCOORD3;
+    public float4 shadowClip0  : TEXCOORD4;
+    public float4 shadowClip1  : TEXCOORD5;
+    public float4 shadowClip2  : TEXCOORD6;
+};
+
+// Terrain pixel shader output. The single colour target is gated by
+// `HAS_COLOR` so the engine's NULL_PASS stub (which emits no output
+// signature whatsoever — `dcl_output` is absent in the original DXBC)
+// can be reconstructed by passing `HAS_COLOR=false`. The two MRT targets
+// (depth-feedback in .x = view-Z, and packed world normal + 1) are
+// independently gated by `HAS_MRT`.
+public struct TerrainPSOutput<let HAS_COLOR : bool, let HAS_MRT : bool>
+{
+    public Conditional<float4, HAS_COLOR>    color      : SV_Target0;
+    public Conditional<float4, HAS_MRT>      depthFeed  : SV_Target1;
+    public Conditional<float4, HAS_MRT>      normalEnc  : SV_Target2;
+};
+
+// Foliage pixel shader input. Mirrors `FoliageVSOutput` slot-for-slot.
+// The cascade clip slots are declared unconditionally — slangc's PS
+// input layout is fixed at the struct level, but fxc DCEs the
+// `dcl_input_ps` for unread slots on the non-shadow perms.
+public struct FoliagePSInput
+{
+    public float4 svPosition   : SV_Position;
+    public float4 color        : COLOR0;
+    public float4 texCoord     : TEXCOORD0;
+    public float4 worldPos     : TEXCOORD1;
+    public float3 worldNormal  : TEXCOORD2;
+    public float4 worldTangent : TEXCOORD3;
+    public float4 shadowClip0  : TEXCOORD4;
+    public float4 shadowClip1  : TEXCOORD5;
+    public float4 shadowClip2  : TEXCOORD6;
+};
+
+// Foliage pixel shader output. Like `TerrainPSOutput`, the colour
+// target is gated by `HAS_COLOR` so the engine's NULL_PASS stub
+// (no SV_Target entries) can be reconstructed by passing
+// `HAS_COLOR=false`. The two MRT targets are independently gated.
+public struct FoliagePSOutput<let HAS_COLOR : bool, let HAS_MRT : bool>
+{
+    public Conditional<float4, HAS_COLOR>    color      : SV_Target0;
+    public Conditional<float4, HAS_MRT>      depthFeed  : SV_Target1;
+    public Conditional<float4, HAS_MRT>      normalEnc  : SV_Target2;
+};
+
+// Sprite pixel shader input. Mirrors SpriteVSOutput. svPosition is
+// declared so the ISGN matches the shipped shader signature (the
+// original sprite shader emits SV_POSITION even though the body never
+// reads it — fxc DCEs the unused interpolant from the dcl_input list).
+public struct SpritePSInput
+{
+    public float4 svPosition : SV_Position;
+    public float2 uv         : TEXCOORD0;
+};
+
 // PopcornFX pixel shader input. Mirrors the live members of
 // `PopcornVSOutput` slot-for-slot (the VS side gates each slot with
 // `Conditional<>`, so unwritten slots arrive here with undefined

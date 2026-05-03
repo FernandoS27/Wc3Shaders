@@ -403,6 +403,142 @@ def map_tonemap_ps(idx: int) -> PermSpec:
     return PermSpec(entry="tonemap_ps_main", types=[], label="(only)")
 
 
+def map_sprite_vs(idx: int) -> PermSpec:
+    # Single permutation — pre-projected sprite VS has no feature axes.
+    return PermSpec(entry="sprite_vs_main", types=[], label="(only)")
+
+
+def map_sprite_ps(idx: int) -> PermSpec:
+    # 4 permutations driven by 2 independent bools:
+    #   bit 0 — HAS_SRGB_ENCODE (linear → sRGB write)
+    #   bit 1 — HAS_SRGB_DECODE (sRGB    → linear read)
+    # Both bits set is a passthrough (the encode/decode pair cancels),
+    # matching the engine's perm_003 == perm_000 collapse.
+    enc = "true" if (idx & 1) else "false"
+    dec = "true" if (idx & 2) else "false"
+    return PermSpec(
+        entry="sprite_ps_main",
+        types=[enc, dec],
+        label=f"ENC={enc}+DEC={dec}",
+    )
+
+
+def map_distortion_ps(idx: int) -> PermSpec:
+    # Single permutation — full-screen chromatic-aberration pass has no
+    # feature axes.
+    return PermSpec(entry="distortion_ps_main", types=[], label="(only)")
+
+
+def map_terrain_vs(idx: int) -> PermSpec:
+    # 8 perms = 3 raw bits, but only 4 functionally distinct outputs:
+    #   bit 0 — SHADOW_PASS      (caster pass; suppresses cascade output)
+    #   bit 1 — RECEIVE_SHADOWS  (emit cascade UVs)
+    #   bit 2 — VERTEX_COLOR     (per-vertex RGBA from ATTR2)
+    # Effective HAS_SHADOWS = (RECEIVE_SHADOWS && !SHADOW_PASS) — a draw
+    # rendering its own caster pass never emits cascade UVs even when
+    # the receive flag is also set. perm_001/003/005/007 collapse onto
+    # perm_000/000/004/004 respectively.
+    shadow_pass = bool(idx & 1)
+    receive     = bool(idx & 2)
+    vert_color  = bool(idx & 4)
+    has_shadows = receive and not shadow_pass
+
+    vc = "true" if vert_color  else "false"
+    sh = "true" if has_shadows else "false"
+    return PermSpec(
+        entry="terrain_vs_main",
+        types=[vc, sh],
+        label=f"VC={vc}+SH={sh}",
+    )
+
+
+def map_foliage_vs(idx: int) -> PermSpec:
+    # 8 perms = 3 raw bits, but only 4 functionally distinct outputs:
+    #   bit 0 — SHADOW_PASS    (caster pass; suppresses cascade output)
+    #   bit 1 — RECEIVE_SHADOWS
+    #   bit 2 — WIND_ANIMATION
+    # Effective HAS_SHADOWS = (RECEIVE_SHADOWS && !SHADOW_PASS) — same
+    # collapse rule as terrain_vs.
+    shadow_pass = bool(idx & 1)
+    receive     = bool(idx & 2)
+    wind        = bool(idx & 4)
+    has_shadows = receive and not shadow_pass
+
+    sh = "true" if has_shadows else "false"
+    wd = "true" if wind        else "false"
+    return PermSpec(
+        entry="foliage_vs_main",
+        types=[sh, wd],
+        label=f"SH={sh}+WIND={wd}",
+    )
+
+
+def map_foliage_ps(idx: int) -> PermSpec:
+    # 128 perms (7 raw bits) — every bit is functionally distinct:
+    #   bit 0 (1)   — MRT_OUTPUTS
+    #   bit 1 (2)   — NULL_PASS    (overrides everything; 64/128 collapse)
+    #   bit 2 (4)   — RECEIVE_SHADOWS
+    #   bit 3 (8)   — FOG_LINEAR
+    #   bit 4 (16)  — FOG_EXPONENTIAL  (with bit 3 → FogExp2)
+    #   bit 5 (32)  — ALPHA_TEST
+    #   bit 6 (64)  — TINT_OVERRIDE
+    null_pass = bool(idx & 2)
+    mrt       = bool(idx & 1)
+    shadows   = bool(idx & 4)
+    fogL      = bool(idx & 8)
+    fogE      = bool(idx & 16)
+    at        = bool(idx & 32)
+    tint      = bool(idx & 64)
+
+    if fogL and fogE:
+        fog = "FogExp2"
+    elif fogL:
+        fog = "FogLinear"
+    elif fogE:
+        fog = "FogExponential"
+    else:
+        fog = "FogNone"
+
+    npS  = "true" if null_pass else "false"
+    mrtS = "true" if mrt       else "false"
+    shS  = "true" if shadows   else "false"
+    atS  = "true" if at        else "false"
+    tnS  = "true" if tint      else "false"
+    return PermSpec(
+        entry="foliage_ps_main",
+        types=[npS, mrtS, shS, fog, atS, tnS],
+        label=f"NULL={npS}+MRT={mrtS}+SH={shS}+{fog}+AT={atS}+TINT={tnS}",
+    )
+
+
+def map_terrain_ps(idx: int) -> PermSpec:
+    # 128 perms (7 raw bits) but only 4 functionally distinct axes:
+    #   bit 0 (1)   — MRT_OUTPUTS
+    #   bit 1 (2)   — NULL_PASS    (overrides everything; 64/128 collapse)
+    #   bit 2 (4)   — RECEIVE_SHADOWS
+    #   bit 3 (8)   — unused (reserved)
+    #   bit 4 (16)  — unused (reserved)
+    #   bit 5 (32)  — unused (reserved)
+    #   bit 6 (64)  — TINT_OVERRIDE
+    # The reserved bits collapse to identical bytecode under the same
+    # functional axes, so the mapper just ignores them — slangc gets the
+    # same -specialize tuple for every collapse-equivalent index.
+    null_pass = bool(idx & 2)
+    mrt       = bool(idx & 1)
+    shadows   = bool(idx & 4)
+    tint      = bool(idx & 64)
+
+    npS = "true" if null_pass else "false"
+    mrtS = "true" if mrt      else "false"
+    shS  = "true" if shadows  else "false"
+    tnS  = "true" if tint     else "false"
+    return PermSpec(
+        entry="terrain_ps_main",
+        types=[npS, mrtS, shS, tnS],
+        label=f"NULL={npS}+MRT={mrtS}+SH={shS}+TINT={tnS}",
+    )
+
+
 def map_popcorn_vs(idx: int) -> PermSpec:
     # 72 perms = 9 outer blocks × 8 inner bits.
     #   inner bits (0..7):
@@ -550,6 +686,13 @@ MAPPERS: dict[str, Callable[[int], PermSpec]] = {
     "popcorn_vs":     map_popcorn_vs,
     "popcorn_ps":     map_popcorn_ps,
     "tonemap_ps":     map_tonemap_ps,
+    "sprite_vs":      map_sprite_vs,
+    "sprite_ps":      map_sprite_ps,
+    "terrain_vs":     map_terrain_vs,
+    "terrain_ps":     map_terrain_ps,
+    "foliage_vs":     map_foliage_vs,
+    "foliage_ps":     map_foliage_ps,
+    "distortion_ps":  map_distortion_ps,
 }
 
 # Fail fast if the config and the mapper set drift — every family listed

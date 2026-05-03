@@ -308,6 +308,136 @@ public SamplerState s_waterDepth  : register(s1);
 public SamplerState s_waterNormal : register(s2);
 public SamplerState s_waterProbe  : register(s3);
 
+// Per-draw constants for the foliage vertex shader (b2). 16 float4
+// slots — superset of the terrain VS layout with two extra float4s for
+// the constant tint colour (cb2[13]) and the 2×3 UV0 transform matrix
+// (cb2[14..15]). The wind-animation perms additionally read
+// `effectTime` from cb2[12].x.
+//
+//   shadowWorld   @ cb2[0..3]   — full 4×4 model→world used to feed the
+//                                 cascade matrices in cb1 (shadow path
+//                                 only).
+//   worldRow0/1/2 @ cb2[4..6]   — three rows of the model→world rotation
+//                                 (.xyz of each are the columns of the
+//                                 world 3×3 used for normals/tangents).
+//   worldTranslate@ cb2[7]      — model→world translation (.xyz only).
+//   worldViewProj @ cb2[8..11]  — model→clip 4×4 for SV_Position.
+//   effectTime    @ cb2[12].x   — engine clock used as the cos/sin
+//                                 wind-swing phase. .yzw are unused.
+//   tintColor     @ cb2[13]     — RGBA constant tint multiplied against
+//                                 the per-vertex COLOR.
+//   texMtx0Row0   @ cb2[14]     — UV0 affine row 0 (.xyw lanes only).
+//   texMtx0Row1   @ cb2[15]     — UV0 affine row 1 (.xyw lanes only).
+//
+// The vertex-color slot is always read by the body, so the foliage VS
+// has no `HAS_VERTEX_COLOR` axis. fxc still shrinks the cb declaration
+// based on highest indexed access, so wind-on perms emit `CB2[16]`
+// while wind-off perms emit `CB2[16]` as well (the latter still touches
+// cb2[14..15] for the UV transform).
+public struct FoliageVSPerDraw
+{
+    public float4x4 shadowWorld;     // cb2[0..3]
+    public float4   worldRow0;       // cb2[4]
+    public float4   worldRow1;       // cb2[5]
+    public float4   worldRow2;       // cb2[6]
+    public float4   worldTranslate;  // cb2[7]
+    public float4x4 worldViewProj;   // cb2[8..11]
+    public float    effectTime;      public float3 _padTime; // cb2[12]
+    public float4   tintColor;       // cb2[13]
+    public float4   texMtx0Row0;     // cb2[14]
+    public float4   texMtx0Row1;     // cb2[15]
+};
+
+public ConstantBuffer<FoliageVSPerDraw> foliageVsCB2 : register(b2);
+
+// Wind-area parameters (b3, only bound when WIND_ANIMATION is active).
+//   .xy = world-space origin of the wind area (anchor for the gradient
+//          texture mapping).
+//   .zw = wind area size in world units (used as the UV scale).
+public struct FoliageWindCB
+{
+    public float2 windOrigin;
+    public float2 windSize;
+};
+
+public ConstantBuffer<FoliageWindCB> foliageVsCB3 : register(b3);
+
+// Foliage VS wind-direction texture (only bound on WIND_ANIMATION
+// perms). Single-channel scalar field sampled at three nearby texels
+// to recover a 2D gradient.
+public Texture2D<float4> t_foliageWind : register(t0);
+public SamplerState      s_foliageWind : register(s0);
+
+// Foliage pixel-shader textures. Slot ordering matches the engine
+// bindings recovered from the BLS perms:
+//   t0 albedo + alpha, t1 packed normal map (xyw lanes), t2 mask
+//   (yz = roughness/metallic), t3 emissive, t4 lightmap / AO (.w lane).
+// Cascaded shadow + IBL probe + BRDF LUT bindings are reused from the
+// shared HD aliases (sd_t_shadow*, t_iblFrom/To, t_brdfLut).
+public Texture2D<float4> t_foliageAlbedo   : register(t0);
+public Texture2D<float4> t_foliageNormal   : register(t1);
+public Texture2D<float4> t_foliageMask     : register(t2);
+public Texture2D<float4> t_foliageEmissive : register(t3);
+public Texture2D<float4> t_foliageLightmap : register(t4);
+
+public SamplerState s_foliageAlbedo   : register(s0);
+public SamplerState s_foliageNormal   : register(s1);
+public SamplerState s_foliageMask     : register(s2);
+public SamplerState s_foliageEmissive : register(s3);
+public SamplerState s_foliageLightmap : register(s4);
+
+// Per-draw constants for the terrain vertex shader (b2). The terrain
+// pipeline uses a layout distinct from the HD `VSPerDraw`:
+//
+//   shadowWorld   @ cb2[0..3]   — full 4×4 model→world used to feed the
+//                                 cascade matrices in cb1 (shadow path
+//                                 only — fxc DCE'ds it on non-shadow
+//                                 perms because nothing reads it).
+//   worldRow0/1/2 @ cb2[4..6]   — three rows of the model→world rotation
+//                                 (the .xyz of each are taken as the
+//                                 columns of the world 3×3); used to
+//                                 transform normals + tangents.
+//   worldTranslate@ cb2[7]      — model→world translation (.xyz only).
+//   worldViewProj @ cb2[8..11]  — model→clip 4×4 for SV_Position.
+//   _padReserved  @ cb2[12]     — present in the no-vertex-color layout,
+//                                 never read.
+//   tintColor     @ cb2[13]     — RGBA constant tint, used only when the
+//                                 vertex format does not carry COLOR.
+//
+// fxc's CB declaration shrinks based on the highest accessed index, so
+// the vertex-color-feeding perms (which never read cb2[12..13]) emit
+// `dcl_constantbuffer CB2[12]` while the constant-tint perms emit
+// `CB2[14]` — even though the slang struct is fixed at 14 float4s.
+public struct TerrainVSPerDraw
+{
+    public float4x4 shadowWorld;     // cb2[0..3]
+    public float4   worldRow0;       // cb2[4]
+    public float4   worldRow1;       // cb2[5]
+    public float4   worldRow2;       // cb2[6]
+    public float4   worldTranslate;  // cb2[7]
+    public float4x4 worldViewProj;   // cb2[8..11]
+    public float4   _padReserved;    // cb2[12]
+    public float4   tintColor;       // cb2[13]
+};
+
+public ConstantBuffer<TerrainVSPerDraw> terrainVsCB2 : register(b2);
+
+// Terrain pixel-shader splat textures. Slot ordering matches the
+// engine bindings: t0 splat color array, t1 splat normal+gloss array
+// (rg = nx/ny, w = gloss), t2 splat mask array (.yz = mask UV), t3
+// global lightmap / AO (.w = AO factor). The terrain PS shares t10..t15
+// (cascade shadows + IBL probes + BRDF LUT) with the HD pipeline via
+// the existing aliases declared above.
+public Texture2DArray<float4> t_splatColor  : register(t0);
+public Texture2DArray<float4> t_splatNormal : register(t1);
+public Texture2DArray<float4> t_splatMask   : register(t2);
+public Texture2D<float4>      t_lightmap    : register(t3);
+
+public SamplerState s_splatColor  : register(s0);
+public SamplerState s_splatNormal : register(s1);
+public SamplerState s_splatMask   : register(s2);
+public SamplerState s_lightmap    : register(s3);
+
 // Per-draw constants for the PopcornFX vertex shader (b2). Aliases
 // the same buffer as `vsCB2` (the engine binds them at the same
 // register slot) but exposes only the fields the popcorn pipeline
@@ -458,3 +588,22 @@ public ConstantBuffer<TonemapPSPerDraw> tonemapPsCB1 : register(b1);
 //   s0 = linear-clamp sampler paired with the scene target
 public Texture2D<float4> t_sceneHdr : register(t0);
 public SamplerState      s_sceneHdr : register(s0);
+
+// Sprite PS texture bindings. Aliases the same D3D slots the HD mesh
+// PS uses (t0 / s0) — sprite draws bind their own source texture here
+// and slangc only emits the binding for the active entry point, so the
+// declaration coexists with the HD material bindings above.
+public Texture2D<float4> t_sprite : register(t0);
+public SamplerState      s_sprite : register(s0);
+
+// Distortion PS texture bindings. The full-screen distortion pass
+// samples a previous-frame scene texture (t0) at four offset UVs
+// driven by an offset map (t1) — see `distortion_ps.slang` for the
+// per-channel chromatic blend. Both bindings reuse the engine's
+// shared t0/t1 slot numbers; slangc only emits whichever entry-
+// point references them, so they coexist with the HD aliases above.
+public Texture2D<float4> t_distortionScene : register(t0);
+public Texture2D<float4> t_distortionMap   : register(t1);
+
+public SamplerState s_distortionScene : register(s0);
+public SamplerState s_distortionMap   : register(s1);
