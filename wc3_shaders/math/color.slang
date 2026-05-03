@@ -42,3 +42,16 @@ public float3 linearToSrgb(float3 linear)
     float3 lin = 12.9200001 * linear;
     return select(linear <= float3(0.00313080009), lin, curve);
 }
+
+// Inverse of `linearToSrgb`: piecewise sRGB → linear decoding (IEC
+// 61966-2-1). Used by the sprite pipeline to decode an sRGB-encoded
+// source texture into linear before downstream sampling. Below 0.04045
+// the transfer is the linear segment (1/12.92); above, ((c + 0.055) /
+// 1.055)^2.4, again expressed as exp2(log2(...)·2.4) so the compiler
+// avoids a `pow` instrinsic.
+public float3 srgbToLinearIEC(float3 srgb)
+{
+    float3 curve = exp2(log2(abs((srgb + 0.0549999997) * 0.947867334)) * 2.4000001);
+    float3 lin = 0.0773993805 * srgb;
+    return select(srgb <= float3(0.0404499993), lin, curve);
+}

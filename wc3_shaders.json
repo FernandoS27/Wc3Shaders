@@ -55,11 +55,65 @@
       "perm_count": 4,
       "bls_name": "water.bls"
     },
+    "popcorn_vs": {
+      "stage": "vs",
+      "entry": "popcorn_vs_main",
+      "perm_count": 72,
+      "bls_name": "popcornfx.bls"
+    },
+    "popcorn_ps": {
+      "stage": "ps",
+      "entry": "popcorn_ps_main",
+      "perm_count": 1152,
+      "bls_name": "popcornfx.bls"
+    },
     "tonemap_ps": {
       "stage": "ps",
       "entry": "tonemap_ps_main",
       "perm_count": 1,
       "bls_name": "tonemap.bls"
+    },
+    "sprite_vs": {
+      "stage": "vs",
+      "entry": "sprite_vs_main",
+      "perm_count": 1,
+      "bls_name": "sprite.bls"
+    },
+    "sprite_ps": {
+      "stage": "ps",
+      "entry": "sprite_ps_main",
+      "perm_count": 4,
+      "bls_name": "sprite.bls"
+    },
+    "terrain_vs": {
+      "stage": "vs",
+      "entry": "terrain_vs_main",
+      "perm_count": 8,
+      "bls_name": "terrain.bls"
+    },
+    "terrain_ps": {
+      "stage": "ps",
+      "entry": "terrain_ps_main",
+      "perm_count": 128,
+      "bls_name": "terrain.bls"
+    },
+    "foliage_vs": {
+      "stage": "vs",
+      "entry": "foliage_vs_main",
+      "perm_count": 8,
+      "bls_name": "foliage.bls"
+    },
+    "foliage_ps": {
+      "stage": "ps",
+      "entry": "foliage_ps_main",
+      "perm_count": 128,
+      "bls_name": "foliage.bls"
+    },
+    "distortion_ps": {
+      "stage": "ps",
+      "entry": "distortion_ps_main",
+      "perm_count": 1,
+      "bls_name": "distortion.bls"
     }
   }
 }

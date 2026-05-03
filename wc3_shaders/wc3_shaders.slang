@@ -74,6 +74,19 @@ __include "ps/ps_ibl";
 __include "ps/ps_standard";
 __include "ps/ps_post";
 
+// Terrain pixel-shader bodies (splat blend + cascaded shadow + lit
+// dominant + multi-light loop + TINT_OVERRIDE debug router).
+__include "ps/terrain_ps_splat";
+__include "ps/terrain_ps_shadow";
+__include "ps/terrain_ps_lighting";
+__include "ps/terrain_ps_debug";
+__include "ps/terrain_ps_body";
+
+// Foliage pixel-shader body. Single-texture material variant of the
+// terrain pipeline — reuses terrain's shadow / lighting / debug helpers
+// but with its own sampling block and fog-policy axis.
+__include "ps/foliage_ps_body";
+
 // Crystal pixel-shader bodies (refractive variant of the HD pipeline).
 __include "ps/crystal_ps_depth_prepass";
 __include "ps/crystal_ps_ibl";
@@ -101,6 +114,8 @@ __include "ps/tonemap_ps_body";
 // Vertex-shader helpers.
 __include "vs/vs_body";
 __include "vs/sd_vs_lighting";
+__include "vs/terrain_vs_body";
+__include "vs/foliage_vs_body";
 
 // Entry points.
 __include "hd_ps";
@@ -115,3 +130,10 @@ __include "water_ps";
 __include "popcorn_vs";
 __include "popcorn_ps";
 __include "tonemap_ps";
+__include "sprite_vs";
+__include "sprite_ps";
+__include "terrain_vs";
+__include "terrain_ps";
+__include "foliage_vs";
+__include "foliage_ps";
+__include "distortion_ps";
