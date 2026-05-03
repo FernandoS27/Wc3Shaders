@@ -243,23 +243,11 @@ public float4 psIBLBody<
     let HAS_DEBUG_VIS : bool>(
     PSInput input, bool isFrontFace)
 {
-    // Shadow cascade attenuation — sampled up front so both the main
-    // directional light and the HLSL scheduler see the same register
-    // layout as the retail shader (shadow visibility lands in r2.z
-    // before the normal-map decode). Skipped when the VS didn't pass
-    // shadowClip coords (HAS_EXTRA_VERTS=false).
-    float shadowAtten = 1.0;
-    if (HAS_EXTRA_VERTS)
-    {
-        shadowAtten = sdSampleShadowCascades(
-            input.shadowClip0, input.shadowClip1, input.shadowClip2,
-            asuint(sdPsCB1.numCascades));
-    }
-
-    // Base material sampling. Multi-layer materials also need the blend
+    // Base material sampling first — the retail shader emits all four
+    // texture fetches (t0/t1/t2/t3) before any shadow-cascade work, so
+    // mirror that order here. Multi-layer materials also need the blend
     // weight from t2.w, so we take the .yzw swizzle up front and let
-    // the non-ML path ignore the .w lane — this matches the single
-    // sample op the retail shader emits.
+    // the non-ML path ignore the .w lane.
     float4 albedo = t_albedo.Sample(s_albedo, input.uv.xy);
     float3 normalSample = t_normal.Sample(s_normal, input.uv.xy).xyw;
     float3 ormFull = t_orm.Sample(s_orm, input.uv.xy).yzw;
@@ -307,6 +295,20 @@ public float4 psIBLBody<
         MultiLayerResult ml = multiLayerBlend(albedo.xyz, teamAlbedo, blendWeight, emissive);
         albedo.xyz = ml.albedo;
         emissive = ml.emissive;
+    }
+
+    // Shadow cascade attenuation. The retail shader places this between
+    // the t0..t3 base samples (above) and the normal-decode / TBN block
+    // (below) — staging the work so the cascade selection sits squarely
+    // inside the scope where shadowClip0..2 are live and the t1 normal
+    // sample is the next logical fetch. Skipped when the VS didn't pass
+    // shadowClip coords (HAS_EXTRA_VERTS=false).
+    float shadowAtten = 1.0;
+    if (HAS_EXTRA_VERTS)
+    {
+        shadowAtten = sdSampleShadowCascades(
+            input.shadowClip0, input.shadowClip1, input.shadowClip2,
+            asuint(sdPsCB1.numCascades));
     }
 
     // Build the view-space shading normal and reconstruct a roughness mip that

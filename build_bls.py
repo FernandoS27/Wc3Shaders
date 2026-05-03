@@ -42,6 +42,19 @@ DEFAULT_SLANG_OUT = REPO_ROOT / "slang_out"
 DXBC_TARGET_SUBDIR  = "d3d11"   # compile_all_slang writes .dxbc under this target.
 METAL_TARGET_SUBDIR = "metal"   # ... and .metallib under this one (macOS only).
 
+# Extra (non-shipped) backends: opengl/vulkan/webgpu. Wc3 itself never loads
+# these — the engine only ships DX and Metal — but `--build-extra` still
+# packages the slangc outputs into BLS containers so users can ship them
+# alongside the originals for ports / re-implementations. Each tuple is:
+#   (slang_target_subdir, file_ext, vs_outdir, ps_outdir).
+# The output subdirectories follow the convention ``<api><stage>`` to
+# parallel the shipped ``mtlfs/mtlvs`` naming for Metal.
+EXTRA_BACKENDS = {
+    "opengl": ("opengl", "glsl", "glslvs", "glslps"),
+    "vulkan": ("vulkan", "spv",  "spvvs",  "spvps"),
+    "webgpu": ("webgpu", "wgsl", "wgpuvs", "wgpups"),
+}
+
 
 PERM_INNER_HEADER_SIZE       = 0x50  # bytes before the DXBC blob in each DX perm
 METAL_PERM_INNER_HEADER_SIZE = 0x2C  # bytes before the MTLB blob in each Metal perm
@@ -614,7 +627,6 @@ def build_bls(template_path, slang_dir, num_perms, strip=False, verbose=False):
         raise ValueError(
             f'{template_path}: template has {tmpl["num_perms"]} perms, expected {num_perms}')
 
-    width = max(3, len(str(num_perms - 1)))
     perm_blobs = []
     skipped_null = 0
 
@@ -624,7 +636,9 @@ def build_bls(template_path, slang_dir, num_perms, strip=False, verbose=False):
             skipped_null += 1
             continue
 
-        dxbc_path = os.path.join(slang_dir, f'perm_{i:0{width}d}.dxbc')
+        # Filename format must match compile_all_slang.py's `f"perm_{i:03d}.{ext}"`
+        # — 3-digit minimum with natural expansion past 999.
+        dxbc_path = os.path.join(slang_dir, f'perm_{i:03d}.dxbc')
         with open(dxbc_path, 'rb') as fp:
             dxbc = fp.read()
 
@@ -714,21 +728,32 @@ def read_metal_template_nulls(bls_path, num_perms):
     return nulls
 
 
-def pack_metal_perm(metallib):
-    """Serialize one Metal perm: 20 zero || payload_size || stage=1 || entry_cnt=1
-       || mtlb_size || 8 || 1 || MTLB || 0x00."""
-    mtlb_size    = len(metallib)
-    payload_size = 0x14 + mtlb_size                 # bytes from +0x18 to end-of-MTLB
-    perm_size    = METAL_PERM_INNER_HEADER_SIZE + mtlb_size + 1  # +1 trailing 0x00
+def pack_blob_perm(blob):
+    """Serialize one blob-style perm (Metal MTLB or extra-backend blob).
+
+    Wire format — shared by Metal v1.8 (§3.5) and the extra-backend BLS
+    variants for opengl / vulkan / webgpu (§3.6):
+
+        20 zero || payload_size || stage=1 || entry_cnt=1
+                || blob_size || 8 || 1 || blob || 0x00
+
+    Unlike DX perms there is no opaque per-perm metadata chunk to preserve
+    from the shipped templates — the only per-perm wrapper is the 44-byte
+    inner header itself, so the same packer works for any opaque blob
+    payload.
+    """
+    blob_size    = len(blob)
+    payload_size = 0x14 + blob_size                 # bytes from +0x18 to end-of-blob
+    perm_size    = METAL_PERM_INNER_HEADER_SIZE + blob_size + 1  # +1 trailing 0x00
     buf = bytearray(perm_size)
     # bytes [0..0x14) stay zero (pre_meta)
     struct.pack_into('<I', buf, 0x14, payload_size)
     struct.pack_into('<I', buf, 0x18, BLS_METAL_STAGE)
     struct.pack_into('<I', buf, 0x1C, 1)             # entry_count
-    struct.pack_into('<I', buf, 0x20, mtlb_size)
+    struct.pack_into('<I', buf, 0x20, blob_size)
     struct.pack_into('<I', buf, 0x24, 8)
     struct.pack_into('<I', buf, 0x28, 1)
-    buf[METAL_PERM_INNER_HEADER_SIZE:METAL_PERM_INNER_HEADER_SIZE + mtlb_size] = metallib
+    buf[METAL_PERM_INNER_HEADER_SIZE:METAL_PERM_INNER_HEADER_SIZE + blob_size] = blob
     # buf[-1] already 0 — trailing padding byte.
     return bytes(buf)
 
@@ -745,12 +770,12 @@ def build_metal_bls(template_path, slang_dir, num_perms, verbose=False):
     else:
         nulls = [False] * num_perms
 
-    width = max(3, len(str(num_perms - 1)))
     perm_blobs = []
     skipped_null = 0
 
     for i in range(num_perms):
-        metallib_path = os.path.join(slang_dir, f'perm_{i:0{width}d}.metallib')
+        # Filename format must match compile_all_slang.py — see build_bls().
+        metallib_path = os.path.join(slang_dir, f'perm_{i:03d}.metallib')
         if nulls[i] or not os.path.isfile(metallib_path) \
                 or os.path.getsize(metallib_path) == 0:
             perm_blobs.append(b'')
@@ -759,7 +784,7 @@ def build_metal_bls(template_path, slang_dir, num_perms, verbose=False):
 
         with open(metallib_path, 'rb') as fp:
             metallib = fp.read()
-        perm_blobs.append(pack_metal_perm(metallib))
+        perm_blobs.append(pack_blob_perm(metallib))
 
     cum, total = [], 0
     for blob in perm_blobs:
@@ -787,14 +812,88 @@ def build_metal_bls(template_path, slang_dir, num_perms, verbose=False):
 
 def has_metallibs(slang_dir):
     """True if `slang_dir` contains at least one non-empty .metallib file."""
+    return _has_blobs(slang_dir, '.metallib')
+
+
+def _has_blobs(slang_dir, suffix):
+    """True if `slang_dir` contains at least one non-empty file with `suffix`."""
     if not os.path.isdir(slang_dir):
         return False
     for name in os.listdir(slang_dir):
-        if name.endswith('.metallib'):
+        if name.endswith(suffix):
             p = os.path.join(slang_dir, name)
             if os.path.isfile(p) and os.path.getsize(p) > 0:
                 return True
     return False
+
+
+# ============================================================
+# Extra-backend BLS rebuild — opengl / vulkan / webgpu
+# ============================================================
+# Wc3 itself never loads these formats; they are emitted on request via
+# `--build-extra` so users porting the engine to a non-DX/non-Metal target
+# have a ready-made BLS bundle for each shader family. The wire format is
+# identical to Metal v1.8 (§3.5 in the BLS spec) — uncompressed v1.8 outer
+# header + cumulative offset table, 44-byte per-perm inner header, opaque
+# blob, single trailing 0x00 byte. The blob payload depends on the backend:
+# raw GLSL / WGSL source text or a SPIR-V binary module.
+
+def build_extra_bls(slang_dir, ext, num_perms, nulls=None, verbose=False):
+    """Return the bytes of a rebuilt extra-backend BLS (opengl/vulkan/webgpu).
+
+    `slang_dir` is the per-family slang_out subdirectory (e.g.
+    ``slang_out/opengl/hd_vs``); `ext` is the file extension that
+    compile_all_slang.py emits for that backend (``glsl``, ``spv``, or
+    ``wgsl``). `nulls` is an optional list[bool] marking which perm slots
+    should be left empty — typically derived from the DX template so the
+    extra bundles mirror the shipped null-perm pattern. When `nulls` is
+    None, any missing or zero-byte file is treated as a null perm.
+    """
+    if nulls is None:
+        nulls = [False] * num_perms
+
+    perm_blobs = []
+    skipped_null = 0
+
+    for i in range(num_perms):
+        # Filename format must match compile_all_slang.py — see build_bls().
+        blob_path = os.path.join(slang_dir, f'perm_{i:03d}.{ext}')
+        if nulls[i] or not os.path.isfile(blob_path) \
+                or os.path.getsize(blob_path) == 0:
+            perm_blobs.append(b'')
+            skipped_null += 1
+            continue
+
+        with open(blob_path, 'rb') as fp:
+            blob = fp.read()
+        perm_blobs.append(pack_blob_perm(blob))
+
+    cum, total = [], 0
+    for blob in perm_blobs:
+        total += len(blob)
+        cum.append(total)
+
+    off_data = BLS_FILE_HEADER_SIZE + num_perms * 4
+    file_buf = bytearray(off_data + total)
+    file_buf[0:4] = BLS_MAGIC
+    struct.pack_into('<HH', file_buf, 4, BLS_MINOR, BLS_MAJOR)
+    struct.pack_into('<4I', file_buf, 8, BLS_PRE_META, num_perms, off_data, 0)
+    struct.pack_into(f'<{num_perms}I', file_buf, BLS_FILE_HEADER_SIZE, *cum)
+
+    cursor = off_data
+    for blob in perm_blobs:
+        file_buf[cursor:cursor + len(blob)] = blob
+        cursor += len(blob)
+
+    if verbose:
+        print(f'  [.{ext}] {num_perms} perms ({skipped_null} null), '
+              f'file size {len(file_buf):#x}')
+    return bytes(file_buf)
+
+
+def extra_dir_for(stage, vs_dir, ps_dir):
+    """Pick the ``glslvs/glslps``-style output subdirectory for a given stage."""
+    return vs_dir if stage == 'vs' else ps_dir
 
 
 # ============================================================
@@ -818,6 +917,13 @@ def main():
     ap.add_argument('--strip', action='store_true',
                     help='strip RDEF/STAT chunks from DXBC (match shipped chunk layout) '
                          'and recompute the DXBC hash')
+    ap.add_argument('--build_extra', '--build-extra', action='store_true',
+                    help='also build BLS bundles for the non-shipped backends '
+                         '(opengl -> glslvs/glslps, vulkan -> spvvs/spvps, '
+                         'webgpu -> wgpuvs/wgpups). Reads per-family blobs from '
+                         '<slang-out>/{opengl,vulkan,webgpu}/<family>/. The DX '
+                         'template (when present) supplies the null-perm pattern '
+                         'so the extra bundles line up with the shipped layout.')
     ap.add_argument('--verbose', '-v', action='store_true')
     args = ap.parse_args()
 
@@ -839,6 +945,11 @@ def main():
         template = os.path.join(args.templates, cfg.dx_dir, template_name)
         slang_dir = os.path.join(dxbc_root, fam)
 
+        # Track the DX template's null-perm pattern so the extra-backend
+        # passes below can mirror it. Falls back to "all live" when the
+        # DX template is missing.
+        dx_nulls = None
+
         if not os.path.isfile(template):
             print(f'SKIP {fam}: template missing ({template})', file=sys.stderr)
         elif not os.path.isdir(slang_dir):
@@ -857,23 +968,56 @@ def main():
             except Exception as e:
                 print(f'FAIL {fam}: {e}', file=sys.stderr)
 
+        # Read the DX template once for its null pattern (cheap; same
+        # template was just consumed by build_bls). Used by both the
+        # Metal and extra-backend passes.
+        if os.path.isfile(template):
+            try:
+                tmpl = read_template(template)
+                dx_nulls = [mc is None for mc in tmpl['middle_chunks']]
+            except Exception:
+                dx_nulls = None
+
         # ---------- Metal (mtlfs/, mtlvs/) — only if metallibs were emitted ----
         m_slang_dir = os.path.join(metal_root, fam)
-        if not has_metallibs(m_slang_dir):
+        if has_metallibs(m_slang_dir):
+            m_template = os.path.join(args.templates, cfg.metal_dir, template_name)
+            m_out_dir  = os.path.join(args.output, cfg.metal_dir)
+            os.makedirs(m_out_dir, exist_ok=True)
+            m_out_path = os.path.join(m_out_dir, cfg.bls_name)
+            try:
+                blob = build_metal_bls(m_template, m_slang_dir, num_perms,
+                                       verbose=args.verbose)
+                with open(m_out_path, 'wb') as fp:
+                    fp.write(blob)
+                print(f'wrote {m_out_path} ({len(blob):#x} bytes, {num_perms} perms)')
+            except Exception as e:
+                print(f'FAIL {fam} [metal]: {e}', file=sys.stderr)
+
+        # ---------- Extra backends (opengl/vulkan/webgpu) — opt-in ---------
+        if not args.build_extra:
             continue
 
-        m_template = os.path.join(args.templates, cfg.metal_dir, template_name)
-        m_out_dir  = os.path.join(args.output, cfg.metal_dir)
-        os.makedirs(m_out_dir, exist_ok=True)
-        m_out_path = os.path.join(m_out_dir, cfg.bls_name)
-        try:
-            blob = build_metal_bls(m_template, m_slang_dir, num_perms,
-                                   verbose=args.verbose)
-            with open(m_out_path, 'wb') as fp:
-                fp.write(blob)
-            print(f'wrote {m_out_path} ({len(blob):#x} bytes, {num_perms} perms)')
-        except Exception as e:
-            print(f'FAIL {fam} [metal]: {e}', file=sys.stderr)
+        for backend, (target_subdir, ext, vs_outdir, ps_outdir) in EXTRA_BACKENDS.items():
+            x_slang_dir = os.path.join(args.slang_out, target_subdir, fam)
+            if not _has_blobs(x_slang_dir, '.' + ext):
+                # Slang didn't produce blobs for this backend — silently
+                # skip rather than error, so partial slangc runs still
+                # build whatever did succeed.
+                continue
+
+            x_out_subdir = extra_dir_for(cfg.stage, vs_outdir, ps_outdir)
+            x_out_dir    = os.path.join(args.output, x_out_subdir)
+            os.makedirs(x_out_dir, exist_ok=True)
+            x_out_path   = os.path.join(x_out_dir, cfg.bls_name)
+            try:
+                blob = build_extra_bls(x_slang_dir, ext, num_perms,
+                                       nulls=dx_nulls, verbose=args.verbose)
+                with open(x_out_path, 'wb') as fp:
+                    fp.write(blob)
+                print(f'wrote {x_out_path} ({len(blob):#x} bytes, {num_perms} perms)')
+            except Exception as e:
+                print(f'FAIL {fam} [{backend}]: {e}', file=sys.stderr)
 
 
 if __name__ == '__main__':
