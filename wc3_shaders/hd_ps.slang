@@ -105,11 +105,6 @@ public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> ps_main<
     result.xyz = TFog.apply(result.xyz, psCB2.fogColor.xyz,
                             input.worldPos.z, psCB2.fogStart, psCB2.fogEnd, psCB2.fogDensity);
 
-    // The IBL path deferred its backface discard — run it now after
-    // the body has finished.
-    if (HAS_IBL)
-        backfaceDiscard(input.worldPos.w);
-
     if (!HAS_DEBUG_VIS)
     {
         // Release: apply the post color-matrix grade and finish the
@@ -142,6 +137,15 @@ public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> ps_main<
         if (!TFog.hasFog)
             result.w = psCB2.inverseSoftness * result.w;
     }
+
+    // The IBL path defers its backface discard to the very end —
+    // matches the retail shader, where `discard_nz` is the last
+    // instruction before the SV_Target writes. Doing the discard
+    // earlier would force slangc to emit it before the post-lighting
+    // texture samples (e.g. the deferred emissive read), which can
+    // disrupt quad-level derivative computation on some GPUs.
+    if (HAS_IBL)
+        backfaceDiscard(input.worldPos.w);
 
     output.color = result;
     if (IS_MRT)

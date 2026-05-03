@@ -38,11 +38,6 @@ public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> toon_ps_main<
     PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> output;
     bool isFrontFace = frontFace != 0;
 
-    // Early backface discard for the non-IBL / non-prepass paths — the
-    // IBL body defers it, the prepass handles it internally.
-    if (!HAS_IBL && !IS_DEPTH_PREPASS)
-        backfaceDiscard(input.worldPos.w);
-
     if (IS_DEPTH_PREPASS)
     {
         // The depth prepass only cares about producing an identical
@@ -120,6 +115,11 @@ public PSOutput<IS_MRT && !IS_DEPTH_PREPASS, !IS_DEPTH_PREPASS> toon_ps_main<
         if (!TFog.hasFog)
             result.w = psCB2.inverseSoftness * result.w;
     }
+
+    // Early backface discard for the non-IBL / non-prepass paths — the
+    // IBL body defers it, the prepass handles it internally.
+    if (HAS_IBL)
+        backfaceDiscard(input.worldPos.w);
 
     output.color = result;
     if (IS_MRT)

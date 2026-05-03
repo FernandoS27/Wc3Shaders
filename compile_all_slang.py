@@ -12,6 +12,7 @@ relative to this script's location.
 """
 
 import argparse
+import concurrent.futures
 import glob
 import os
 import shutil
@@ -138,10 +139,10 @@ def invoke_slangc(entry: str, target: str, profile: str,
 
 
 def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
-              stage: str, target_key: str) -> SweepResult:
+              stage: str, target_key: str, jobs: int = 1) -> SweepResult:
     cfg = TARGETS[target_key]
     print()
-    print(f"========== [{target_key}] {family} ({count} perms) ==========")
+    print(f"========== [{target_key}] {family} ({count} perms, jobs={jobs}) ==========")
     out_dir = OUT_BASE / target_key / family
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -150,6 +151,17 @@ def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
     target = cfg["target"]
     profile = cfg[stage]
     extra = cfg.get("extra", [])
+
+    # The shipped SD classic pixel shader is compiled to SM4 / SM2 (SHDR
+    # + Aon9 chunks) for D3D9 compatibility — every other shipped shader
+    # uses SM5 (SHEX). The Wc3 engine binds the SD classic perm via its
+    # legacy pipeline and rejects (or mis-binds) SM5 bytecode there, so
+    # we override the D3D11 PS profile to ps_4_0 for this family. SM4 is
+    # a strict subset of SM5 for the operations the SD classic PS uses
+    # (one or two `Sample`s, fixed-function blend, optional fog +
+    # `discard`), so the only behaviour change is the chunk type.
+    if family == "sd_classic_ps" and target_key == "d3d11":
+        profile = "ps_4_0"
 
     # Custom-shader families compile from their own module file with
     # wc3_shaders on the include path so `import wc3_shaders;` resolves.
@@ -174,16 +186,35 @@ def run_sweep(family: str, count: int, mapper: Callable[[int], PermSpec],
         include_dirs = None
         custom_extra = extra
 
-    for i in range(count):
-        spec = mapper(i)
-        out_path = out_dir / f"perm_{i:03d}.{ext}"
+    # Build the per-perm work list once so the executor only has to dispatch.
+    perm_specs = [(i, mapper(i), out_dir / f"perm_{i:03d}.{ext}")
+                  for i in range(count)]
 
-        if not invoke_slangc(spec.entry, target, profile, spec.types, out_path,
-                             shader_path, custom_extra, include_dirs):
+    def compile_one(item):
+        i, spec, out_path = item
+        ok = invoke_slangc(spec.entry, target, profile, spec.types, out_path,
+                           shader_path, custom_extra, include_dirs)
+        return i, spec, ok
+
+    # Each slangc invocation is a long-running subprocess, so a thread
+    # pool parallelises well — the GIL is released while we wait on the
+    # child process. Use sequential dispatch when jobs<=1 to keep stack
+    # traces tidy on single-thread runs.
+    if jobs <= 1:
+        outcomes = [compile_one(item) for item in perm_specs]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            outcomes = list(pool.map(compile_one, perm_specs))
+
+    for i, spec, ok in outcomes:
+        if ok:
+            result.ok += 1
+        else:
             result.fail += 1
             result.fail_list.append(f"perm_{i} ({spec.label})")
-            continue
-        result.ok += 1
+
+    # Keep the fail list in perm-index order so it's stable across runs.
+    result.fail_list.sort()
 
     print()
     print(f"Compile: {result.ok} OK / {result.fail} fail")
@@ -730,7 +761,16 @@ def main() -> int:
                              "unless this flag overrides it.")
     parser.add_argument("--slangc", help="Path to slangc executable "
                                          "(overrides PATH / VULKAN_SDK lookup).")
+    parser.add_argument("--jobs", "-j", type=int, default=os.cpu_count() or 1,
+                        help="Number of parallel slangc processes to run "
+                             "(default: %(default)s = os.cpu_count()). "
+                             "Each permutation is an independent slangc "
+                             "invocation, so this scales near-linearly until "
+                             "you saturate the CPU. Use --jobs 1 for "
+                             "deterministic single-thread output.")
     args = parser.parse_args()
+    if args.jobs < 1:
+        args.jobs = 1
 
     # On macOS we can drive Apple's metal compiler to emit real .metallib
     # bytecode (not just .metal source), which build_bls.py can then pack
@@ -749,6 +789,7 @@ def main() -> int:
     slangc = resolve_slangc(args.slangc)
     print(f"Using slangc: {slangc}")
     print(f"Shader module: {SHADER}")
+    print(f"Parallel jobs: {args.jobs}")
     if mac_min:
         print(f"Metal output: metallib (macOS min={mac_min})")
 
@@ -765,7 +806,7 @@ def main() -> int:
         for name, count, mapper, stage in SWEEPS:
             if args.family != "all" and args.family != name:
                 continue
-            result = run_sweep(name, count, mapper, stage, target_key)
+            result = run_sweep(name, count, mapper, stage, target_key, args.jobs)
             all_results.append((target_key, result))
 
     print()

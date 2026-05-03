@@ -2,7 +2,7 @@
 
 An open-source recreation of the shaders used by **Warcraft III: Reforged**, reverse-engineered from the game's shipped `.bls` shader bundles.
 
-The project reimplements every shader family the game ships — **SD**, **SD-on-HD**, **HD**, **Crystal**, **water**, and the HDR→LDR **tonemap** — in [Slang](https://shader-slang.com/), then re-packs the compiled bytecode back into the game's `.bls` wire format so patched shaders can be dropped into the game. A separate `custom_shaders` module sits on top of the reconstruction for user-authored variants (currently a toon / cel-shaded HD variant). Both the DirectX bundles (`ps/`, `vs/`) and the Metal bundles (`mtlfs/`, `mtlvs/`) are covered; Metal packing only runs when built on macOS, where Apple's Metal compiler is available.
+The project reimplements every shader family the game ships — **SD**, **SD-on-HD**, **HD**, **Crystal**, **water**, **terrain**, **foliage**, **sprite**, **distortion**, **PopcornFX particles**, and the HDR→LDR **tonemap** — in [Slang](https://shader-slang.com/), then re-packs the compiled bytecode back into the game's `.bls` wire format so patched shaders can be dropped into the game. A separate `custom_shaders` module sits on top of the reconstruction for user-authored variants (currently a toon / cel-shaded HD variant). Both the DirectX bundles (`ps/`, `vs/`) and the Metal bundles (`mtlfs/`, `mtlvs/`) are covered; Metal packing only runs when built on macOS, where Apple's Metal compiler is available. An opt-in `--build_extra` mode also packs OpenGL (`glslvs/glslps`), Vulkan (`spvvs/spvps`) and WebGPU (`wgpuvs/wgpups`) BLS bundles for ports / re-implementations that need a non-shipped backend.
 
 ## What's in the repo
 
@@ -14,7 +14,8 @@ The project reimplements every shader family the game ships — **SD**, **SD-on-
 | [custom_shaders.json](custom_shaders.json) | Declarative config for user-authored variant families. This is the file you edit to add a new variant shader. |
 | [shader_config.py](shader_config.py) | Loads and merges both JSON files into a single `FamilyConfig` view used by the build scripts. |
 | [compile_all_slang.py](compile_all_slang.py) | Compiles every permutation of every family to a chosen graphics API target (D3D11 by default). |
-| [build_bls.py](build_bls.py) | Packs the compiled DXBC blobs back into `.bls` files using the shipped `.bls` files as binding-metadata templates. |
+| [build_bls.py](build_bls.py) | Packs the compiled DXBC blobs back into `.bls` files using the shipped `.bls` files as binding-metadata templates. With `--build_extra` also packs OpenGL / Vulkan / WebGPU bundles. |
+| [docs/BLS_FILE_FORMAT_SPECIFICATION.md](docs/BLS_FILE_FORMAT_SPECIFICATION.md) | Reverse-engineered BLS wire-format reference — covers the v1.8 / v1.12 / v1.14 outer containers, DX / Metal / extra-backend inner perm layouts, and the `--build_extra` directory conventions. |
 
 ## Shader families
 
@@ -33,7 +34,16 @@ Defined in [wc3_shaders.json](wc3_shaders.json). These mirror the shipped BLS la
 | `sd_classic_ps` | Pixel | 200 | `ps/sd.bls` |
 | `water_vs` | Vertex | 1 | `vs/water.bls` |
 | `water_ps` | Pixel | 4 | `ps/water.bls` |
+| `popcorn_vs` | Vertex | 72 | `vs/popcornfx.bls` |
+| `popcorn_ps` | Pixel | 1152 | `ps/popcornfx.bls` |
 | `tonemap_ps` | Pixel | 1 | `ps/tonemap.bls` |
+| `sprite_vs` | Vertex | 1 | `vs/sprite.bls` |
+| `sprite_ps` | Pixel | 4 | `ps/sprite.bls` |
+| `terrain_vs` | Vertex | 8 | `vs/terrain.bls` |
+| `terrain_ps` | Pixel | 128 | `ps/terrain.bls` |
+| `foliage_vs` | Vertex | 8 | `vs/foliage.bls` |
+| `foliage_ps` | Pixel | 128 | `ps/foliage.bls` |
+| `distortion_ps` | Pixel | 1 | `ps/distortion.bls` |
 
 ### Custom variants (backed by `custom_shaders/custom_shaders.slang`)
 
@@ -94,7 +104,7 @@ Useful flags:
 | Flag | Purpose |
 | --- | --- |
 | `--family <name>` | Compile only one family (e.g. `--family toon_hd_ps`). |
-| `--target <api>` | Pick a target: `d3d11` (default), `d3d12`, `vulkan`, `opengl`, `metal`, `webgpu`, or `all`. Only `d3d11` output can be packed into `.bls`. |
+| `--target <api>` | Pick a target: `d3d11` (default), `d3d12`, `vulkan`, `opengl`, `metal`, `webgpu`, or `all`. `d3d11` output is always packable into `.bls`; `metal` (`.metallib`) packs on macOS; `opengl` / `vulkan` / `webgpu` outputs pack via `--build_extra` (see step 2). |
 | `--slangc <path>` | Explicit `slangc` path. |
 | `--metallib <macos-min>` | When targeting `metal`, emit compiled `.metallib` instead of Metal source. Requires Xcode; macOS only. |
 
@@ -104,7 +114,7 @@ Useful flags:
 python build_bls.py --templates war3.w3mod/shaders --output bls_out
 ```
 
-This reads the compiled `.dxbc` blobs from `slang_out/d3d11/` and writes rebuilt `.bls` files to `bls_out/{ps,vs}/`, using the shipped `.bls` files (or the configured `template_override`) as templates for per-permutation metadata (resource bindings, stage flags, etc.).
+This reads the compiled `.dxbc` blobs from `slang_out/d3d11/` and writes rebuilt `.bls` files to `bls_out/{ps,vs}/`, using the shipped `.bls` files (or the configured `template_override`) as templates for per-permutation metadata (resource bindings, stage flags, etc.). On macOS, when `slang_out/metal/` contains compiled `.metallib` blobs, Metal bundles are also written to `bls_out/{mtlfs,mtlvs}/`.
 
 Useful flags:
 
@@ -112,12 +122,24 @@ Useful flags:
 | --- | --- |
 | `--family <name>` | Rebuild only one family (repeatable). |
 | `--strip` | Strip `RDEF` / `STAT` chunks from the DXBC and recompute the hash so the output matches the shipped chunk layout byte-for-byte. |
-| `--slang-out <dir>` | Alternate location of the compiled DXBC tree (defaults to `./slang_out`). |
+| `--build_extra` | Also pack OpenGL / Vulkan / WebGPU outputs into BLS bundles under `bls_out/{glslvs,glslps,spvvs,spvps,wgpuvs,wgpups}/`. Requires the corresponding `compile_all_slang.py --target <api>` runs to have populated `slang_out/{opengl,vulkan,webgpu}/`. The DX template (when present) supplies the null-perm pattern so the extra bundles match the shipped slot layout. |
+| `--slang-out <dir>` | Alternate location of the compiled blob tree (defaults to `./slang_out`). |
 | `--verbose` | Print per-family size summaries. |
+
+#### Extra backends
+
+The shipped game only loads DX (`ps/`, `vs/`) and Metal (`mtlfs/`, `mtlvs/`) BLS files. `--build_extra` produces additional BLS bundles for OpenGL, Vulkan and WebGPU using the same v1.8 outer container — see [docs/BLS_FILE_FORMAT_SPECIFICATION.md §3.6](docs/BLS_FILE_FORMAT_SPECIFICATION.md). The inner per-perm wire format mirrors Metal v1.8 (44-byte header + opaque blob + trailing `0x00`); the blob is raw GLSL / WGSL source text or a SPIR-V binary module. These bundles are intended for engine ports / re-implementations rather than the shipped Warcraft III client.
+
+To produce the full set:
+
+```sh
+python compile_all_slang.py --target all
+python build_bls.py --templates war3.w3mod/shaders --output bls_out --strip --build_extra
+```
 
 ### Installing the patched shaders
 
-Copy the files from `bls_out/ps/` and `bls_out/vs/` over the originals in your Warcraft III installation's corresponding `shaders/ps` and `shaders/vs` directories (back up the originals first).
+Copy the files from `bls_out/ps/` and `bls_out/vs/` over the originals in your Warcraft III installation's corresponding `shaders/ps` and `shaders/vs` directories (back up the originals first). The `glslvs/glslps/spvvs/spvps/wgpuvs/wgpups/` bundles produced by `--build_extra` are not consumed by the shipped game.
 
 ## Adding a custom shader
 

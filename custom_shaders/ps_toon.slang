@@ -69,41 +69,6 @@ static const float TOON_SPEC_POWER_MAX   = 256.0;  // at roughness = 0
 static const float TOON_RIM_POWER        = 2.0;
 static const float TOON_RIM_STRENGTH     = 0.5;
 
-// Screen-space pseudo-outline tunables. A true inverted-hull outline
-// needs a second draw pass, which we can't issue without changing the
-// HD pipeline layout we patch into. The mask is split into two roles:
-//
-//   - silhouette (1 - NdotV) : produces ONLY the outer border. The
-//       threshold sits right up against grazing so a curved cape or
-//       cloak doesn't turn into a dark gradient on its far side.
-//   - cavity (ORM.R)         : handles all inner inking — armor seams,
-//       joint folds, anything artists baked into the occlusion map.
-//
-// The old screen-space crease and depth-edge terms have been removed:
-// they caught some inner creases correctly but also false-fired on
-// low-tessellation cloth (triangle-seam banding on capes) and on any
-// surface curving steeply toward grazing. Cavity via the AO channel
-// replaces them with a cleaner, artist-controlled inner-line signal.
-static const float3 TOON_OUTLINE_COLOR       = float3(0.04, 0.04, 0.06);
-static const float  TOON_OUTLINE_SIL_START   = 0.92;
-static const float  TOON_OUTLINE_SIL_END     = 0.995;
-// Cavity inking uses the tangent-space normal map's Z component as the
-// signal: on a flat pixel the decoded normal is (~0, ~0, 1), so
-// tsNormal.z sits near 1. Wherever the artist baked pressed-in detail
-// (cracks, seams, joint recesses) the normal tilts and tsNormal.z
-// drops below 1. This is purely "does the texture encode a cavity
-// here" and is independent of ORM.R, which in WC3 HD is used as a
-// generic darkening mask (uniform low values on hair / fur / dark
-// shields) rather than a cavity signal — thresholding on ORM.R made
-// whole geosets ink over at close range.
-//
-// Mipmap blending naturally fades the signal at distance (downsampled
-// normals average toward flat), so no explicit distance fade is
-// needed.
-static const float  TOON_OUTLINE_CAVITY_HIGH     = 0.85;
-static const float  TOON_OUTLINE_CAVITY_LOW      = 0.55;
-static const float  TOON_OUTLINE_CAVITY_STRENGTH = 1.0;
-
 // Three-band diffuse step. `shadowAtten` (0..1) comes from the cascade
 // PCF and pushes lit pixels toward the shadow band when a cascade
 // occludes them.
@@ -151,29 +116,6 @@ public float toonRimFactor(float NdotV)
     return pow(oneMinusNdotV, TOON_RIM_POWER) * TOON_RIM_STRENGTH;
 }
 
-// Outline mask built from two signals: a tight silhouette for the outer
-// border and a cavity term for inner inking. `NdotV_sat` is the
-// saturated dot against the view direction, `tsNormalZ` is the Z
-// component of the decoded tangent-space normal (pass 1.0 when
-// unavailable — the cavity term then evaluates to zero).
-public float toonOutlineMask(float NdotV_sat, float tsNormalZ)
-{
-    // Silhouette: fires only right at the border. Threshold is tight so
-    // curved surfaces away from the camera aren't darkened on their
-    // face — only the actual grazing edge pixels qualify.
-    float silhouette = smoothstep(
-        TOON_OUTLINE_SIL_START, TOON_OUTLINE_SIL_END, 1.0 - NdotV_sat);
-
-    // Cavity: wherever the normal map's tangent-space Z drops below
-    // the threshold, the surface has an authored indentation — fold,
-    // seam, crack. Flat surfaces (tsNormal.z ~= 1) stay unink'd.
-    float cavity = smoothstep(
-        TOON_OUTLINE_CAVITY_HIGH, TOON_OUTLINE_CAVITY_LOW, tsNormalZ)
-        * TOON_OUTLINE_CAVITY_STRENGTH;
-
-    return saturate(max(silhouette, cavity));
-}
-
 // =====================================================================
 // Full lit toon body (IBL / directional / shadow cascades).
 // =====================================================================
@@ -187,15 +129,6 @@ public float4 psToonIBLBody<
     let HAS_DEBUG_VIS   : bool>(
     PSInput input, bool isFrontFace)
 {
-    // Shadow cascades (when the VS provided the three clip-space
-    // outputs). Same call as the HD IBL body uses.
-    float shadowAtten = 1.0;
-    if (HAS_EXTRA_VERTS)
-    {
-        shadowAtten = sdSampleShadowCascades(
-            input.shadowClip0, input.shadowClip1, input.shadowClip2,
-            asuint(sdPsCB1.numCascades));
-    }
 
     // Material sample set — matches psIBLBody's .xyz/.yzw swizzle pattern
     // so ML materials pick up the blend-weight in ormFull.z without a
@@ -203,9 +136,6 @@ public float4 psToonIBLBody<
     float4 albedo = t_albedo.Sample(s_albedo, input.uv.xy);
     float3 normalSample = t_normal.Sample(s_normal, input.uv.xy).xyw;
     float4 ormSample = t_orm.Sample(s_orm, input.uv.xy);
-    // HD ignores the occlusion channel (.x); the toon path reads it for
-    // its cavity outline term.
-    float ao = ormSample.x;
     float3 ormFull = ormSample.yzw;
     float2 orm = ormFull.xy;
     float3 emissive = t_emissive.Sample(s_emissive, input.uv.xy).xyz;
@@ -221,6 +151,9 @@ public float4 psToonIBLBody<
             orm = psCB3.overrideOrm.yz;
     }
 
+    float roughness = orm.x;
+    float metalness = orm.y;
+
     float3 teamAlbedo = float3(0, 0, 0);
     float blendWeight = 0.0;
     float teamLuma = 0.0;
@@ -232,14 +165,21 @@ public float4 psToonIBLBody<
         teamLuma = max(max(teamAlbedo.x, teamAlbedo.y), teamAlbedo.z);
     }
 
-    float roughness = orm.x;
-    float metalness = orm.y;
-
     if (TMat.hasMultiLayer)
     {
         MultiLayerResult ml = multiLayerBlend(albedo.xyz, teamAlbedo, blendWeight, emissive);
         albedo.xyz = ml.albedo;
         emissive = ml.emissive;
+    }
+
+    // Shadow cascades (when the VS provided the three clip-space
+    // outputs). Same call as the HD IBL body uses.
+    float shadowAtten = 1.0;
+    if (HAS_EXTRA_VERTS)
+    {
+        shadowAtten = sdSampleShadowCascades(
+            input.shadowClip0, input.shadowClip1, input.shadowClip2,
+            asuint(sdPsCB1.numCascades));
     }
 
     // View-space shading normal. Toon doesn't run specular-AA — the
@@ -248,9 +188,34 @@ public float4 psToonIBLBody<
     float3 viewNormal = tangentToWorld(tsNormal, input.tangentWS.xyz, input.normalWS.xyz, input.tangentWS.w);
     viewNormal = orientNormal(viewNormal, isFrontFace);
 
+    // [DIAGNOSTIC] Cavity multiply temporarily disabled to isolate
+    // whether the recent edits broke rendering.
+
     float3 viewDir = normalize(-input.worldPos.xyz);
     float NdotV = dot(viewNormal, viewDir);
     float NdotV_sat = saturate(NdotV);
+
+    // Cavity darkening driven by the tangent-space normal's Z component.
+    // On flat surfaces tsNormal.z ≈ 1, so cavity ≈ 1 and the multiply is
+    // a no-op; wherever the artist baked pressed-in detail (seams, joint
+    // folds, cracks) the normal tilts and tsNormal.z drops, pulling the
+    // factor toward CAVITY_FLOOR. Uses tsNormal instead of ORM.R because
+    // HD's shipped pipeline ignores ORM.R — AO is per-vertex in vertColor
+    // — so many HD models have a black ORM.R texture which would crush
+    // the whole geoset to zero under an AO multiply.
+    //
+    // The glossy-dielectric lift pulls the factor back up toward CAVITY_LIFT
+    // on smooth non-metal surfaces so polished dielectrics don't go muddy
+    // in their cavities; rough surfaces and metals get the full darken.
+    const float CAVITY_LOW = 0.55;
+    const float CAVITY_HIGH = 0.85;
+    const float CAVITY_FLOOR = 0.55;
+    const float CAVITY_LIFT = 0.75;
+    float glossyDielectric = (1.0 - metalness) * (1.0 - roughness);
+    float cavity = smoothstep(CAVITY_LOW, CAVITY_HIGH, tsNormal.z);
+    float cavityRaw = lerp(CAVITY_FLOOR, 1.0, cavity);
+    float liftedCavity = cavityRaw + glossyDielectric * (CAVITY_LIFT - cavityRaw) * (1.0 - cavityRaw);
+    albedo.xyz *= liftedCavity;
 
     // Toon is not PBR: the full PBR metal/dielectric split kills the
     // albedo on metals, which — combined with IBL specular being skipped
@@ -371,13 +336,6 @@ public float4 psToonIBLBody<
     float3 linearVert = srgbToLinear(input.vertColor.xyz);
     finalColor *= linearVert;
 
-    // Screen-space outline — applied after the lit colour is assembled
-    // so the outline colour is constant instead of being modulated by
-    // vertex tint. Stays under the fresnel overlay so selection rings
-    // still read on top of outlined silhouettes.
-    float outlineMask = toonOutlineMask(NdotV_sat, tsNormal.z);
-    finalColor = lerp(finalColor, TOON_OUTLINE_COLOR, outlineMask);
-
     // Finishing stack: fresnel overlay → cloak. Signatures match what
     // psIBLBody uses so selection rings / stealth look the same on toon
     // materials.
@@ -461,9 +419,6 @@ public float4 psToonStandardBody<let HAS_DEBUG_VIS : bool>(PSInput input, bool i
     float3 litColor = (emissive * psCB2.emissiveGain + albedo.xyz) * bandedVert;
     litColor += toonRimFactor(NdotV) * albedo.xyz;
 
-    float outlineMask = toonOutlineMask(NdotV, tsNormal.z);
-    litColor = lerp(litColor, TOON_OUTLINE_COLOR, outlineMask);
-
     FresnelOverlayResult fr = applyFresnelOverlay(
         litColor, albedo.w, NdotV,
         psCB2.fresnelColor.xyz, psCB2.fresnelColor.w, psCB2.fresnelTeamColor,
@@ -489,7 +444,6 @@ public float4 psToonMultiLayerBody<let HAS_DEBUG_VIS : bool>(PSInput input, bool
     float4 albedo = t_albedo.Sample(s_albedo, input.uv.xy);
     float3 teamAlbedo = t_teamColor.Sample(s_teamColor, input.uv.xy).xyz;
     float4 ormSample = t_orm.Sample(s_orm, input.uv.xy);
-    float ao = ormSample.x;
     float blendWeight = ormSample.w;
     float3 emissive = t_emissive.Sample(s_emissive, input.uv.xy).xyz;
     float3 normalSample = t_normal.Sample(s_normal, input.uv.xy).xyw;
@@ -514,9 +468,6 @@ public float4 psToonMultiLayerBody<let HAS_DEBUG_VIS : bool>(PSInput input, bool
 
     float3 litColor = (ml.emissive * psCB2.emissiveGain + ml.albedo) * bandedVert;
     litColor += toonRimFactor(NdotV) * ml.albedo;
-
-    float outlineMask = toonOutlineMask(NdotV, tsNormal.z);
-    litColor = lerp(litColor, TOON_OUTLINE_COLOR, outlineMask);
 
     FresnelOverlayResult fr = applyFresnelOverlayML(
         litColor, albedo.w, NdotV,
