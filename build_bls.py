@@ -147,10 +147,29 @@ def fix_dxbc_signatures(dxbc):
     `sem_idx` field, so a source semantic of ``TEXCOORD1`` ends up stored
     as ``name="TEXCOORD", sem_idx=10`` in the DXBC — a 10× shift.
 
-    The shipped shaders use semantic indices 0..7, so every bugged index
-    is a multiple of 10 and the original is recoverable by a simple
-    ``sem_idx //= 10``. The SGN string table and entry sizes don't change,
+    Recovery is ``sem_idx // 10 + sem_idx % 10``, NOT ``sem_idx // 10``.
+    A scalar ``TEXCOORDn`` inflates to ``n*10`` and both forms agree, which is
+    why the multiple-of-10 rule survived: every Wc3 index is 0..7. But an
+    ARRAY interpolant inflates element ``e`` of a base-``b`` array to
+    ``b*10 + e`` — ``sc2UV[1]`` at base TEXCOORD40 becomes TEXCOORD401 — and
+    that is not a multiple of 10, so the old rule skipped it and left the
+    element inflated next to its already-corrected base. The result was an
+    internally inconsistent signature (TEXCOORD40, 401, 402, 403 where fxc
+    says 40, 41, 42, 43), shipped in every SC2 bundle. Indices below 10 are
+    fixed points of the formula, so canonical entries are untouched.
+
+    This is the same recovery ``sc2_slang_validate._norm_idx`` applies on the
+    candidate leg; the two must agree or a bundled blob cannot be compared to
+    its reference at all. The SGN string table and entry sizes don't change,
     so this edit is in-place (just a single u32 per entry).
+
+    **Apply exactly once, to slangc output only.** The transform is not
+    idempotent — 320 recovers to 32, but a second pass reads 32 as inflated and
+    yields 5 — and it cannot tell an already-corrected index from an inflated
+    one. That also rules out repairing an existing bundle in place: the only
+    sound fix for a mis-signed blob is to rebuild it from the compiler output.
+    Callers today are ``prepare_dx_perms`` (Wc3) and
+    ``build_sc2_bls._process_dxbc`` (SC2), each once per blob.
 
     Additionally we uppercase system-value names (``SV_Position`` →
     ``SV_POSITION`` etc.) to match the casing in the shipped DXBC blobs;
@@ -180,8 +199,9 @@ def fix_dxbc_signatures(dxbc):
         for i in range(count):
             e_off = body_start + 8 + i * entry_size
             sem_idx, = struct.unpack_from('<I', out, e_off + sem_idx_field)
-            if sem_idx and sem_idx % 10 == 0:
-                struct.pack_into('<I', out, e_off + sem_idx_field, sem_idx // 10)
+            if sem_idx >= 10:
+                struct.pack_into('<I', out, e_off + sem_idx_field,
+                                 sem_idx // 10 + sem_idx % 10)
             name_off, = struct.unpack_from('<I', out, e_off + name_off_field)
             s = body_start + name_off
             end = out.find(b'\x00', s)
@@ -727,34 +747,39 @@ def dxbc_hash(body):
     tail = body[full_blocks * 64:]
     rem = len(tail)
 
-    # Microsoft's custom padding — see Wine d3dcompiler compute_hash().
-    # Layout depends on how much of the final block is occupied.
+    # Microsoft's custom padding.  Standard MD5 appends 0x80, zero-pads and puts
+    # the 64-bit length last; DXBC instead puts the 32-bit BIT LENGTH FIRST in the
+    # final block and a (bits >> 2) | 1 trailer in the last dword.
+    #
+    # The two-block case had a spurious second 0x80.  In the single-block case the
+    # 0x80 terminates the message right after the tail; when the tail does not fit
+    # (rem >= 56) the 0x80 goes into block A with the tail, and block B is bit
+    # length + zeros + trailer -- nothing else.  Writing 0x80 at byte 4 of block B
+    # as well corrupted the hash for EVERY shader whose hashed body is 56 or 60 mod
+    # 64, which is 1 blob in 8 (chunk sizes are dword-aligned, so rem is a multiple
+    # of 4).  fxc validates the container checksum and refuses such a blob outright.
+    #
+    # Verified against an exact oracle rather than against a spec: every blob slangc
+    # emits already carries the correct hash at bytes 4..20, so recomputing and
+    # comparing over the compiled corpus decides it.  115/115 of the rem>=56 blobs
+    # that previously failed now match, and no rem<56 blob changed.
     if rem >= 56:
-        # Block A: tail || 0x80 || zero-pad to 64 bytes
+        # Block A: tail || 0x80 || zero-pad to 64.
         pad = bytearray(tail) + b'\x80'
         pad += b'\x00' * (64 - len(pad))
         state = _md5_core(state, bytes(pad))
-        # Block B: bit_len || 0x80 || 48 zero bytes || 0x40 || zero pad
+        # Block B: bit_len || zeros || trailer.
         final = bytearray(64)
         struct.pack_into('<I', final, 0, bit_len)
-        final[4] = 0x80
-        # bytes 5..59 already zero
-        struct.pack_into('<I', final, 60, 0x80)  # actually write (n*2+1)*bit? See note
-        # The documented Microsoft trick: store bit_len at start, byte 0x80 after it,
-        # then 0x40 trailing marker. Wine's implementation writes:
-        #   padding[0..3] = bit_len
-        #   padding[4] = 0x80
-        #   padding[60..63] = (n*2+1) packed as u32
-        struct.pack_into('<I', final, 60, (n * 2 + 1))
-        final[4:60] = b'\x80' + b'\x00' * 55
+        struct.pack_into('<I', final, 60, (bit_len >> 2) | 1)
         state = _md5_core(state, bytes(final))
     else:
-        # Single final block: bit_len || tail || 0x80 || zero-pad || (n*2+1)
+        # Single final block: bit_len || tail || 0x80 || zero-pad || trailer.
         final = bytearray(64)
         struct.pack_into('<I', final, 0, bit_len)
         final[4:4 + rem] = tail
         final[4 + rem] = 0x80
-        struct.pack_into('<I', final, 60, (n * 2 + 1))
+        struct.pack_into('<I', final, 60, (bit_len >> 2) | 1)
         state = _md5_core(state, bytes(final))
 
     return struct.pack('<4I', *state)

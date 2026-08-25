@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026, Fernando Sahmkow
+// See LICENSE in the repository root for full terms.
+//
+// Preprocessor half of the permutation constant buffer (design section 5.1, plan
+// milestones R3/R5b).  Slang's `__include` merges DECLARATIONS but each `.slang`
+// file is its own PREPROCESSING unit, so a `#define` does not flow across it -- the
+// same lesson recorded for vs/model_vs_defines.slangh.  The CB declaration lives in
+// types/perm_cb.slang (pulled in once by the module root); the ACCESSOR MACRO lives
+// here, to be `#include`d by every file that reads a permutation axis.
+//
+// Contains only #defines, so including it from several files in one module is safe.
+
+#ifndef SC2_PERM_CB_H
+#define SC2_PERM_CB_H
+
+#ifndef SC2_USE_PERM_CB
+#define SC2_USE_PERM_CB 0
+#endif
+
+// The global bit layout: SC2_PERMOFF_/SC2_PERMW_ for every axis, and a
+// SC2_PERMDATA_ default of 0 for every one that is not switched on.
+#include "types/perm_layout.slangh"
+
+// ---------------------------------------------------------------------------
+// SC2_AXIS(name) -- read one permutation axis.
+//
+// Three things have to be true at once, and each of them cost a debugging round:
+//
+// 1. ONE TRANSLATION UNIT.  sc2_shaders is a single module, so a `#if` in one
+//    family's file fires while another family's entry point is being compiled.
+//    That is why the layout is GLOBAL: every SC2_PERMOFF_ exists in every compile,
+//    so a file that is dead code for this entry point still preprocesses.  There is
+//    no longer a per-family adoption switch to get wrong.
+//
+// 2. THE SPLIT IS PER AXIS, NOT PER FAMILY.  `b_useShadows` selects data in a
+//    vertex stage but BINDS A SHADOW MAP in the pixel stage, so the pixel stage
+//    must keep reading the `#define` while the vertex stage reads the buffer.  The
+//    class passes SC2_PERMDATA_<axis>=1 for exactly the axes its packer wrote.
+//    Selecting with `?:` on a compile-time constant, rather than with `#if`, keeps
+//    this to one macro: the dead arm folds away, and -- unlike a preprocessor
+//    branch -- the surviving arm is still type-checked in both configurations.
+//
+// 3. TOKEN PASTING CANNOT BE INDIRECTED.  Every axis also has a file-local
+//    `#ifndef b_useLighting / #define b_useLighting 0` default, so routing the name
+//    through a second macro expands it before the `##` runs and yields
+//    `SC2_PERMOFF_0`.  The `##` must appear in the macro the call site names --
+//    hence one macro here rather than a helper pair.
+//
+// With SC2_USE_PERM_CB off this expands to the axis token itself, so the
+// preprocessor output is character-identical and the compiled DXBC is bit-identical.
+// That is the exit gate every conversion step is measured against.
+#if SC2_USE_PERM_CB
+  #define SC2_AXIS(name) (SC2_PERMDATA_##name                                       \
+                          ? (int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name)  \
+                          : (name))
+#else
+  #define SC2_AXIS(name) (name)
+#endif
+
+#endif // SC2_PERM_CB_H

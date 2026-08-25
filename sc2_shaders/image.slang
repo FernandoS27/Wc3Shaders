@@ -33,6 +33,12 @@
 
 implementing sc2_shaders;
 
+// SC2_AXIS comes from here.  It used to be written out per family, because the
+// layout was per family and a global switch would fire this file's CB reads while
+// another family's entry point was compiling.  The layout is global now, so one
+// macro serves the module and the per-axis SC2_PERMDATA_ flag does the selecting.
+#include "types/perm_cb.slangh"
+
 #ifndef b_colorAdjustMode
 #define b_colorAdjustMode 0
 #endif
@@ -183,13 +189,20 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
     float alphaMult = 1;
     float4 cColor = p_sLayer0_t.Sample(p_sSamp, IN.vTC0.xy);
 
-#if b_renderingInnerText
     // Rendering InnerText means the image is greyscale and only the opaque white
     // parts are wanted: treat 'g' as grey and fold it into alpha, which cuts the
     // inner white text out of its black outline.
-    cColor.a *= cColor.g;
-    cColor.rgb = 1;
-#endif
+    //
+    // `#if` -> `if` on a permutation-CB read.  With SC2_USE_PERM_CB off, SC2_AXIS
+    // expands to the `#define` itself, so this folds away exactly as the `#if` did
+    // -- which is why the conversion is gated by a bit-identity check, not a sweep.
+    // With it on, the predicate is uniform across the draw, so it is a scalar branch
+    // and the untaken side is skipped rather than masked.
+    [branch] if (SC2_AXIS(b_renderingInnerText))
+    {
+        cColor.a *= cColor.g;
+        cColor.rgb = 1;
+    }
 
     // The per-layer alpha source is a CONSTANT-selected channel of the sample
     // (p_vLayerAlphaChannelIndex[i] is a float the shader truncates to 0..3), then
@@ -203,14 +216,17 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
 
     // Alpha-only layers multiply their alpha into the next layer up and contribute
     // no colour to the composite.  The final layer cannot be alpha-only.
-#if b_layer0AlphaOnly
-    alphaMult = cColor.a;
-    cColor.rgb = 0;
-    cColor.a = 1;
-#else
-    cColor.rgb *= cColor.a;
-    cColor.a = 1 - cColor.a;
-#endif
+    [branch] if (SC2_AXIS(b_layer0AlphaOnly))
+    {
+        alphaMult = cColor.a;
+        cColor.rgb = 0;
+        cColor.a = 1;
+    }
+    else
+    {
+        cColor.rgb *= cColor.a;
+        cColor.a = 1 - cColor.a;
+    }
 
 #if (b_iLayerCount > 1)
     {
@@ -221,16 +237,19 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
         newA     = lerp(newA, 1 - newA, psGlobals.vLayerAlphaChannelInverse[1]);
         cLayer.a = lerp(newA, newA * cLayer.a, psGlobals.vLayerAlphaChannelMultiply[1]);
 
-    #if b_layer1AlphaOnly
-        alphaMult *= cLayer.a * IN.cColor1.a;
-    #else
-        cLayer *= IN.cColor1;
+        [branch] if (SC2_AXIS(b_layer1AlphaOnly))
+        {
+            alphaMult *= cLayer.a * IN.cColor1.a;
+        }
+        else
+        {
+            cLayer *= IN.cColor1;
 
-        float alpha = 1 - (cLayer.a * alphaMult);
-        cColor.rgb = lerp(cLayer.rgb, cColor.rgb, alpha);
-        cColor.a *= alpha;
-        alphaMult = 1;
-    #endif
+            float alpha = 1 - (cLayer.a * alphaMult);
+            cColor.rgb = lerp(cLayer.rgb, cColor.rgb, alpha);
+            cColor.a *= alpha;
+            alphaMult = 1;
+        }
     }
 #endif
 #if (b_iLayerCount > 2)
@@ -242,16 +261,19 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
         newA     = lerp(newA, 1 - newA, psGlobals.vLayerAlphaChannelInverse[2]);
         cLayer.a = lerp(newA, newA * cLayer.a, psGlobals.vLayerAlphaChannelMultiply[2]);
 
-    #if b_layer2AlphaOnly
-        alphaMult *= cLayer.a * IN.cColor2.a;
-    #else
-        cLayer *= IN.cColor2;
+        [branch] if (SC2_AXIS(b_layer2AlphaOnly))
+        {
+            alphaMult *= cLayer.a * IN.cColor2.a;
+        }
+        else
+        {
+            cLayer *= IN.cColor2;
 
-        float alpha = 1 - (cLayer.a * alphaMult);
-        cColor.rgb = lerp(cLayer.rgb, cColor.rgb, alpha);
-        cColor.a *= alpha;
-        alphaMult = 1;
-    #endif
+            float alpha = 1 - (cLayer.a * alphaMult);
+            cColor.rgb = lerp(cLayer.rgb, cColor.rgb, alpha);
+            cColor.a *= alpha;
+            alphaMult = 1;
+        }
     }
 #endif
 #if (b_iLayerCount > 3)
@@ -272,7 +294,12 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
     }
 #endif
 
-#if (b_colorAdjustMode == e_imageColorAdjustModeDesaturate)
+    // The five colour-adjust modes are pure selectors over the SAME composite --
+    // no texture, no output, no discard changes between them -- so the mode is a
+    // constant-buffer field and the ladder is a scalar branch.  This one axis is a
+    // 5x multiplier on the retail grid.
+    const int sc2ColorAdjust = SC2_AXIS(b_colorAdjustMode);
+    [branch] if (sc2ColorAdjust == e_imageColorAdjustModeDesaturate)
     {
         float fMax = max(max(cColor.r, cColor.g), cColor.b);
 
@@ -288,7 +315,7 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
 
         cColor.rgb = lerp(cColor.rgb, desaturateColor.rgb, desaturateColor.a);
     }
-#elif (b_colorAdjustMode == e_imageColorAdjustModeColorize)
+    else [branch] if (sc2ColorAdjust == e_imageColorAdjustModeColorize)
     {
         // 2x greyscale value.
         float gray = cColor.r * .62f + cColor.g * 1.1737f + cColor.b * .2067f;
@@ -318,7 +345,7 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
 
         cColor.rgb = lerp(cColor.rgb, colorizeColor.rgb, colorizeColor.a);
     }
-#elif (b_colorAdjustMode == e_imageColorAdjustModeFill)
+    else [branch] if (sc2ColorAdjust == e_imageColorAdjustModeFill)
     {
         float4 fillColor = psGlobals.vLightAdjustColor;
         fillColor.rgb *= (1 - cColor.a);
@@ -326,7 +353,7 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
         // Interpolate between the composite colour and the fill colour.
         cColor.rgb = lerp(cColor.rgb, fillColor.rgb, fillColor.a);
     }
-#elif (b_colorAdjustMode == e_imageColorAdjustModeAddSelf)
+    else [branch] if (sc2ColorAdjust == e_imageColorAdjustModeAddSelf)
     {
         // Un-premultiply the alpha.
         cColor.rgb *= cColor.a >= 1.0f ? 512.0f : (1.0f / (1.0f - cColor.a));
@@ -343,7 +370,6 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
         // No lerp() required — the alpha interpolation has effectively been done.
         cColor.rgb = addColor.rgb;
     }
-#endif
 
 #if b_iUseAlphaMask
     {
@@ -353,9 +379,8 @@ public float4 image_ps_main(ImagePSInput IN) : SV_Target0
     }
 #endif
 
-#if b_imageUse8BitHDR
-    cColor.rgb *= 0.5f;
-#endif
+    [branch] if (SC2_AXIS(b_imageUse8BitHDR))
+        cColor.rgb *= 0.5f;
 
     // common.fx : AlphaTest(1 - cColor.a).
 #if b_iAlphaTest

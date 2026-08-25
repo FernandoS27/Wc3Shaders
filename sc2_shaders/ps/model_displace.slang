@@ -10,6 +10,7 @@
 // live; the strength layer samples with allowEnvio=false), so both are omitted.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #define PASS_SINGLEPASS_DISPLACE 0
 #define PASS_COPYBACK            1
@@ -70,9 +71,8 @@ float4 displace(ModelPSInput vertOut)
         fStrengthSample = getLayerColor2D(vertOut, strCfg, p_sDisplacementStrengthSampler_t,
                                           p_sSamp, 1.0f, vDeferredNormal, tp).a;
     }
-  #if b_useVertexAlphaStrength
-    fStrengthSample *= saturate(vertOut.VertexColor().w);
-  #endif
+    [branch] if (SC2_AXIS(b_useVertexAlphaStrength))
+        fStrengthSample *= saturate(vertOut.VertexColor().w);
 
     // Adjust by depth: project the normal to view space and divide by view depth.
     vNormal = mul((float3x3)psGlobals.mViewTransform, vNormal);
@@ -85,13 +85,14 @@ float4 displace(ModelPSInput vertOut)
 
     // Depth-aware fix (PIXEL_SHADER_VERSION >= PS_30 is always true): if the sampled
     // occluder is in front of this fragment, cancel the displacement.
-  #if b_distortionDepthFix
+    // The depth map is already bound on this path (the displacement pass samples it
+    // unconditionally above), so this is a value axis, not a texture-set one.
+    [branch] if (SC2_AXIS(b_distortionDepthFix))
     {
         float fSampledDepth = decodeDepth(p_sNormalDepthMap_t.Sample(p_sSamp, vDisplacedUV));
         if (fSampledDepth < vertOut.ViewPos().y)
             vDisplacedUV = vUV;
     }
-  #endif
 
     return p_sDisplacementSrc_t.Sample(p_sSamp, vDisplacedUV);
 

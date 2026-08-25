@@ -31,6 +31,9 @@ module sc2_shaders;
 __include "portable";
 
 // --- Data types -------------------------------------------------------------
+// The permutation constant buffer (b2) and the SC2_AXIS accessor.  Inert until
+// SC2_USE_PERM_CB is set; see types/perm_cb.slang.
+__include "types/perm_cb";
 __include "types/simple_io";
 __include "types/model_io";
 __include "types/model_vs_io";

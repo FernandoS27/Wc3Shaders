@@ -12,6 +12,7 @@
 // tri-planar increment; the explicit-UV normal map is here.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #ifndef b_iTwoSided
 #define b_iTwoSided 0
@@ -47,16 +48,16 @@ implementing sc2_shaders;
 // sampled texel (DXN two-channel form or the plain xyz*2-1 form).
 float3 decodeNormalSample(float4 cTextureSample, out float fExtraValue)
 {
-#if b_DXNStyleNormalMaps
-    float3 vPixelNormal;
-    vPixelNormal.xy = 2.0f * cTextureSample.wy - 1.0f;
-    vPixelNormal.z = sqrt(max(0.0f, 1.0f - dot(vPixelNormal.xy, vPixelNormal.xy)));
-    fExtraValue = 1.0f;                 // w was consumed by the normal
-    return vPixelNormal;
-#else
+    [branch] if (SC2_AXIS(b_DXNStyleNormalMaps))
+    {
+        float3 vPixelNormal;
+        vPixelNormal.xy = 2.0f * cTextureSample.wy - 1.0f;
+        vPixelNormal.z = sqrt(max(0.0f, 1.0f - dot(vPixelNormal.xy, vPixelNormal.xy)));
+        fExtraValue = 1.0f;             // w was consumed by the normal
+        return vPixelNormal;
+    }
     fExtraValue = cTextureSample.w;
     return 2.0f * cTextureSample.xyz - 1.0f;
-#endif
 }
 
 // psmateriallayer.fx : DecodeTextureNormal.
@@ -93,15 +94,14 @@ float3 decodeTextureNormalGrad(Texture2D<float4> tNormalMap, SamplerState sNorma
 // by the [tangent, binormal, normal] basis (or the identity-basis fast path).
 float3 tangentToWorld(float3 vTextureNormal, float3 vNormal, float3 vTangent, float3 vBinormal)
 {
-#if b_useIdentityBasis
-    return normalize(vTextureNormal * float3(1.0f, -1.0f, 1.0f));
-#else
+    [branch] if (SC2_AXIS(b_useIdentityBasis))
+        return normalize(vTextureNormal * float3(1.0f, -1.0f, 1.0f));
+
     float3x3 mTangentToWorld;
     mTangentToWorld[0] = vTangent;
     mTangentToWorld[1] = vBinormal;
     mTangentToWorld[2] = vNormal;
     return normalize(mul(vTextureNormal, mTangentToWorld));
-#endif
 }
 
 // psmaterial.fx : DecodeNormalInternal — the general (layer-parameterised) normal
@@ -142,10 +142,8 @@ float3 decodeNormalInternal(ModelPSInput vertOut, SLayerConfig cfg,
     vNormalWS = normalize(vertOut.Normal().xyz);
 #endif
 
-#if b_iTwoSided
-    if (vertOut.FrontFace())
+    if (SC2_AXIS(b_iTwoSided) && vertOut.FrontFace())
         vNormalWS = -vNormalWS;
-#endif
     return vNormalWS;
 }
 
@@ -187,12 +185,10 @@ float3 decodeNormal(ModelPSInput vertOut)
     vNormalWS = normalize(vertOut.Normal().xyz);
 #endif
 
-#if b_iTwoSided
     // PS_40+ backface flip (psmaterial.fx:479-487): SV_IsFrontFace nonzero flips the
     // normal so two-sided surfaces light correctly from the back.
-    if (vertOut.FrontFace())
+    if (SC2_AXIS(b_iTwoSided) && vertOut.FrontFace())
         vNormalWS = -vNormalWS;
-#endif
 
     return vNormalWS;
 }
@@ -221,10 +217,8 @@ float3 decodeNormalGradInternal(ModelPSInput vertOut, SLayerConfig cfg,
     vNormalWS = normalize(vertOut.Normal().xyz);
 #endif
 
-#if b_iTwoSided
-    if (vertOut.FrontFace())
+    if (SC2_AXIS(b_iTwoSided) && vertOut.FrontFace())
         vNormalWS = -vNormalWS;
-#endif
     return vNormalWS;
 }
 

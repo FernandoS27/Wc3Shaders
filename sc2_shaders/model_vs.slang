@@ -25,6 +25,37 @@ implementing sc2_shaders;
 // Compile-time axes + .fx enums (see the header: `__include` merges declarations
 // but not #defines, so each VS translation unit includes this itself).
 #include "vs/model_vs_defines.slangh"
+#include "types/perm_cb.slangh"
+
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_computeHeight
+#define b_computeHeight 0
+#endif
+#ifndef b_creepEnabled
+#define b_creepEnabled 0
+#endif
+#ifndef b_iUseLocalTriPlanarTangentSpace
+#define b_iUseLocalTriPlanarTangentSpace 0
+#endif
+#ifndef b_iUseLocalTriPlanarWeights
+#define b_iUseLocalTriPlanarWeights 0
+#endif
+#ifndef b_iUseWorldTriPlanarTangentSpace
+#define b_iUseWorldTriPlanarTangentSpace 0
+#endif
+#ifndef b_iUseWorldTriPlanarWeights
+#define b_iUseWorldTriPlanarWeights 0
+#endif
+#ifndef b_iVertexAOFromVertexColor
+#define b_iVertexAOFromVertexColor 0
+#endif
+#ifndef b_iZOffsetFromUB4N_XY
+#define b_iZOffsetFromUB4N_XY 0
+#endif
+#ifndef b_splatTextureProjectorEnabled
+#define b_splatTextureProjectorEnabled 0
+#endif
 
 // ---------------------------------------------------------------------------
 // model.fx : local helpers
@@ -109,7 +140,7 @@ float4 vsEmitModelNormal(ModelVSVertex vertIn)
 float4 vsEmitModelAOData(ModelVSVertex vertIn)
 {
     float4 value = float4(0, 0, 0, 0);
-    if (b_iVertexAOFromVertexColor)
+    if (SC2_AXIS(b_iVertexAOFromVertexColor))
     {
 #if b_iLayoutHasColor
         value = vertIn.cColor.a;
@@ -140,7 +171,7 @@ float4 vsEmitModelTangent(ModelVSVertex vertIn, float3 vTriPlanarWeightsWorld)
     {
         return float4(vsComputeGridTangent(vertIn.vNormal.xyz), 1);
     }
-    else if (b_splatTextureProjectorEnabled)
+    else if (SC2_AXIS(b_splatTextureProjectorEnabled))
     {
         float3 b = cross(vertIn.vNormal.xyz, vsGlobals.vSplatTextureUVector.xyz);
         float3 t = cross(b, vertIn.vNormal.xyz);
@@ -158,7 +189,7 @@ float3 vsEmitModelBinormal(ModelVSVertex vertIn, float3 vTangent)
 {
     if (b_iShadingMode == VS_SHADINGMODE_TERRAIN)
         return normalize(cross(vTangent.xyz, vertIn.vNormal.xyz));
-    else if (b_splatTextureProjectorEnabled)
+    else if (SC2_AXIS(b_splatTextureProjectorEnabled))
         return normalize(cross(vTangent.xyz, vertIn.vNormal.xyz));
     else
         // sign of INTERPOLANT_Normal.w is the handedness
@@ -205,7 +236,7 @@ float4 vsEmitModelVertexColor(ModelVSVertex vertIn)
         return id;
     }
     // material splat on model
-    else if (b_splatTextureProjectorEnabled)
+    else if (SC2_AXIS(b_splatTextureProjectorEnabled))
     {
         float a = vsSplatAttenuationProjector(
             vertIn.vPosition.xyz, vsGlobals.vSplatAttenuationPlane[0],
@@ -244,7 +275,7 @@ float4 vsEmitModelFOWUV(ModelVSVertex vertIn)
 // Terrain blended-texture UVs and creep texture UVs.
 float4 vsEmitTerrainCreepTextureUV(ModelVSVertex vertIn)
 {
-    if (!b_computeHeight)
+    if (!SC2_AXIS(b_computeHeight))
     {
         float2 t = mul(vertIn.vPosition, vsGlobals.mTerrainTextureMatrix).xy;
         float2x2 rot = float2x2(vsGlobals.vCreepTextureRotation.x,
@@ -300,17 +331,17 @@ public DefaultVSOutput model_vs_main(ModelVSStreamIn streamIn)
     // --- preprocess the vertex's local-space data --------------------------
     // Preserve the local position (for UV mappings based on it).
     float3 vLocalPosition = vertIn.vPosition.xyz;
-    if (b_iZOffsetFromUB4N_XY)
+    if (SC2_AXIS(b_iZOffsetFromUB4N_XY))
     {
 #if b_iLayoutHasCustomUB4N1
         vLocalPosition.z -= vsDecodeZOffset(vertIn.cCustomUB4N1.x, vertIn.cCustomUB4N1.y);
 #endif
     }
     float3 vTriPlanarWeightsLocal = float3(0, 0, 0);
-    if (b_iUseLocalTriPlanarWeights)
+    if (SC2_AXIS(b_iUseLocalTriPlanarWeights))
         vTriPlanarWeightsLocal = vsComputeTriPlanarBlendingWeights(vertIn.vNormal.xyz);
     // Generate procedural triplanar UVs in local space.
-    if (b_iUseLocalTriPlanarTangentSpace)
+    if (SC2_AXIS(b_iUseLocalTriPlanarTangentSpace))
     {
         float4 vNorm = vertIn.vNormal;
         float3 vTan, vBin;
@@ -340,9 +371,9 @@ public DefaultVSOutput model_vs_main(ModelVSStreamIn streamIn)
 
     // The vertex is in world space now — generate procedural triplanar UVs there.
     float3 vTriPlanarWeightsWorld = float3(0, 0, 0);
-    if (b_iUseWorldTriPlanarWeights)
+    if (SC2_AXIS(b_iUseWorldTriPlanarWeights))
         vTriPlanarWeightsWorld = vsComputeTriPlanarBlendingWeights(vertIn.vNormal.xyz);
-    if (b_iUseWorldTriPlanarTangentSpace)
+    if (SC2_AXIS(b_iUseWorldTriPlanarTangentSpace))
     {
         float4 vNorm = vertIn.vNormal;
         float3 vTan, vBin;
@@ -389,7 +420,7 @@ public DefaultVSOutput model_vs_main(ModelVSStreamIn streamIn)
 
     // Creep rotates the texture, so the tangent frame has to rotate with it.
     // (WRITE_INTERPOLANT_SWIZZLE_* — a no-op when that varying was packed out.)
-    if (b_creepEnabled)
+    if (SC2_AXIS(b_creepEnabled))
     {
         float2x2 invRot = float2x2(vsGlobals.InvCreepTextureRotation.x,
                                    vsGlobals.InvCreepTextureRotation.y,

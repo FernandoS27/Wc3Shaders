@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 import compile_all_slang as cas
 import sc2_shaders_cfg as cfg
+import sc2_perm_reduce as R
 
 OUT_ROOT = REPO_ROOT / "sc2_slang_out"
 # Targets come from compile_all_slang's table (the same slangc target / profile /
@@ -119,27 +120,49 @@ def module_mtime():
 
 
 def compile_stage(family, stage, jobs=8, verbose=False, skip_existing=False,
-                  watermark=None, target=None, sample=0):
+                  watermark=None, target=None, sample=0, reduced=False):
+    """Compile one (family, stage) -- either every retail SLOT, or one blob per CLASS.
+
+    The reduced build is the whole point of the permutation reduction: `struct_defines`
+    is a pure function of the structural key, so one blob serves every member of its
+    class and the per-slot difference is carried by the b2 payload that
+    build_sc2_bls.py writes into the .perm side table.  Output goes to its OWN
+    directory (`<Family>_<stage>_reduced`), never mixed with the per-slot build --
+    `class_007.dxbc` and `perm_007.dxbc` mean different things and a consumer that
+    confused them would silently ship the wrong shader for 20,000 permutations."""
     scfg = cfg.family_cfg(family).get(stage)
     if scfg is None:
         return None
     target = target or DEFAULT_TARGET
     tgt = TARGETS[target]
     entry = scfg["slang_entry"]
-    out_dir = OUT_ROOT / target / ("%s_%s" % (family, stage))
+    suffix = "_reduced" if reduced else ""
+    out_dir = OUT_ROOT / target / ("%s_%s%s" % (family, stage, suffix))
     out_dir.mkdir(parents=True, exist_ok=True)
-    slots = sample_slots(family, stage, sample) if sample else list(
-        cfg.iter_slots(family, stage))
+    if reduced:
+        classes, _slots = R.build_classes(family, stage)
+        items = list(enumerate(classes))
+        if sample and len(items) > sample:
+            step = max(1, len(items) // sample)
+            items = items[::step][:sample]
+    else:
+        items = sample_slots(family, stage, sample) if sample else list(
+            cfg.iter_slots(family, stage))
     wm = watermark if watermark is not None else (module_mtime() if skip_existing else 0.0)
     skipped = [0]
 
     def work(item):
-        slot, bv, live, _dedup = item
-        out = out_dir / ("perm_%03d.%s" % (slot, tgt["ext"]))
+        if reduced:
+            idx, key = item
+            out = out_dir / ("class_%05d.%s" % (idx, tgt["ext"]))
+            defines = R.struct_defines(family, stage, key)
+        else:
+            idx, bv, live, _dedup = item
+            out = out_dir / ("perm_%03d.%s" % (idx, tgt["ext"]))
+            defines = cfg.perm_defines(family, stage, bv, live)
         if skip_existing and out.exists() and out.stat().st_mtime >= wm:
             skipped[0] += 1
-            return slot, True
-        defines = cfg.perm_defines(family, stage, bv, live)
+            return idx, True
         # The profile is the TARGET's, not always ps_5_0/vs_5_0: DXIL needs *_6_0
         # and the SPIR-V / GLSL legs want glsl_450 - same table compile_all_slang
         # sweeps wc3_shaders with.
@@ -148,17 +171,18 @@ def compile_stage(family, stage, jobs=8, verbose=False, skip_existing=False,
                                extra=tgt["extra"],
                                include_dirs=[Path(cfg.SC2_INCLUDE)],
                                defines=defines)
-        return slot, ok
+        return idx, ok
 
     if jobs <= 1:
-        res = [work(it) for it in slots]
+        res = [work(it) for it in items]
     else:
         with ThreadPoolExecutor(max_workers=jobs) as ex:
-            res = list(ex.map(work, slots))
+            res = list(ex.map(work, items))
     ok = sum(1 for _, o in res if o)
     fails = [s for s, o in res if not o]
-    print("%-8s %-16s %-2s: %6d/%-6d compiled%s%s"
+    print("%-8s %-16s %-2s: %6d/%-6d %s%s%s"
           % (target, family, stage, ok, len(res),
+             "classes compiled" if reduced else "compiled",
              "  (%d up to date)" % skipped[0] if skipped[0] else "",
              "" if not fails else "  FAILED slots: %s" % fails[:20]),
           flush=True)
@@ -184,6 +208,12 @@ def main(argv=None):
     ap.add_argument("--skip-existing", action="store_true",
                     help="keep perms already newer than the newest module source "
                          "(makes a whole-module sweep resumable)")
+    ap.add_argument("--reduced", action="store_true",
+                    help="compile one blob per structural CLASS instead of one per "
+                         "retail slot (tools/sc2_perm_reduce.py). Writes "
+                         "<Family>_<stage>_reduced/class_<NNNNN>.<ext>; pair it with "
+                         "build_sc2_bls.py --reduced, which emits the .perm side "
+                         "table mapping each retail slot to its class and payload.")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
     if not args.all and not args.family:
@@ -210,7 +240,8 @@ def main(argv=None):
             for tg in targets:
                 r = compile_stage(fam, st, jobs=args.jobs, verbose=args.verbose,
                                   skip_existing=args.skip_existing, watermark=wm,
-                                  target=tg, sample=args.sample)
+                                  target=tg, sample=args.sample,
+                                  reduced=args.reduced)
                 if r is None:
                     continue
                 ok, n, fails = r

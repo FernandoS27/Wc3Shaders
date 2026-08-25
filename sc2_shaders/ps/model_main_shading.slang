@@ -15,6 +15,26 @@
 
 implementing sc2_shaders;
 
+// SC2_LAYER_<Prop>: layer properties are also read OUTSIDE the setup
+// functions, and every such site has to go through the same accessor.
+#include "ps/model_layers_axes.slangh"
+#include "types/perm_cb.slangh"
+
+// A `#if` tolerates an undefined axis; ordinary CODE does not, and the
+// convention only passes -D for NONZERO axes.  Converting these reads from
+// `#if` to a runtime `if` therefore needs their file-local defaults, or the
+// permutations where they are zero stop compiling.
+// (docs: the sc2_shaders file-scope rule.)
+#ifndef b_iEmissiveOp
+#define b_iEmissiveOp 0
+#endif
+#ifndef b_iEmissive2Op
+#define b_iEmissive2Op 0
+#endif
+#ifndef b_iDiffuseTeamColorMode
+#define b_iDiffuseTeamColorMode 0
+#endif
+
 // Shared layer/material enums (slang's __include does NOT propagate #defines across
 // files, so each file that references them in #if / runtime code redeclares them;
 // values from psmaterialdefines.fx / psmaterial.fx).
@@ -102,17 +122,46 @@ implementing sc2_shaders;
 #define b_iInEncoding 0
 #endif
 
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_iEnvioMultipliers
+#define b_iEnvioMultipliers 0
+#endif
+#ifndef b_iSpecularType
+#define b_iSpecularType 0
+#endif
+#ifndef b_iUse8BitHDR
+#define b_iUse8BitHDR 0
+#endif
+#ifndef b_useBlendAdd
+#define b_useBlendAdd 0
+#endif
+#ifndef b_useLighting
+#define b_useLighting 0
+#endif
+#ifndef b_useSpecular
+#define b_useSpecular 0
+#endif
+#ifndef b_useTeamColorSpecular
+#define b_useTeamColorSpecular 0
+#endif
+#ifndef b_useVertexColors
+#define b_useVertexColors 0
+#endif
+
 // pscommon.fx : DecodeDepth — recover the linear depth from the prepass sample.
 float decodeDepth(float4 cSample)
 {
-#if (b_iInEncoding == DEPTH_NORMAL_ENCODING_RGBA)
-    float fDepth = dot(cSample.ba, float2(1.0f, 1.0f / 255.0f));
-    return psGlobals.fMaxDepthFactor * ((1.0f / (1.0f - fDepth)) - 1.0f);
-#elif (b_iInEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
-    return psGlobals.fMaxDepthFactor * ((1.0f / (1.0f - cSample.a)) - 1.0f);
-#else   // DEPTH_NORMAL_ENCODING_FLOAT (and the else -> 0 case, which fxc folds here)
+    const int iInEncoding = SC2_AXIS(b_iInEncoding);
+    [branch] if (iInEncoding == DEPTH_NORMAL_ENCODING_RGBA)
+    {
+        float fDepth = dot(cSample.ba, float2(1.0f, 1.0f / 255.0f));
+        return psGlobals.fMaxDepthFactor * ((1.0f / (1.0f - fDepth)) - 1.0f);
+    }
+    [branch] if (iInEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
+        return psGlobals.fMaxDepthFactor * ((1.0f / (1.0f - cSample.a)) - 1.0f);
+    // DEPTH_NORMAL_ENCODING_FLOAT (and the else -> 0 case, which fxc folds here)
     return cSample.a;
-#endif
 }
 
 // psmaterial.fx : MaterialColor — the full standard-path material stack for the
@@ -137,57 +186,77 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
     // it, so it is omitted until the Envio increment.
 
     // ---- Team-coloured diffuse layer (psmaterial.fx:163-171) ----
-#if b_iDiffuseLayerEnable
+    //
+    // A CORE layer is compiled in whether or not this class's materials use it, so
+    // the sample happens unconditionally and SC2_LAYER_GATE_ is what decides
+    // whether the layer CONTRIBUTES.  The gate reads a constant-buffer bit, which
+    // is uniform, so `[branch]` inside it is free -- unlike the per-pixel term in
+    // the R5b note.  With Diffuse non-core the macro expands to nothing at all.
+#if (SC2_CORE_LAYER_Diffuse || b_iDiffuseLayerEnable)
     {
         SLayerConfig cfg = setupDiffuseLayer();
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sDiffuseSampler_t, p_sSamp, 1.0f, vNormal, tp);
-        cDeferredDiffuse = combineLayerColor(cColor, cDeferredDiffuse, cfg);
-        fTeamColorAlpha = cColor.a;
+        SC2_LAYER_GATE_Diffuse(cfg)
+        {
+            cDeferredDiffuse = combineLayerColor(cColor, cDeferredDiffuse, cfg);
+            fTeamColorAlpha = cColor.a;
+        }
     }
 #endif
 
     // ---- Decal layer (psmaterial.fx:175-179) ----
-#if b_iDecalLayerEnable
+#if (SC2_CORE_LAYER_Decal || b_iDecalLayerEnable)
     {
         SLayerConfig cfg = setupDecalLayer();
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sDecalSampler_t, p_sSamp, 1.0f, vNormal, tp);
+        SC2_LAYER_GATE_Decal(cfg)
         cDeferredDiffuse = combineLayerColor(cColor, cDeferredDiffuse, cfg);
     }
 #endif
 
     // ---- Specular layer (psmaterial.fx:182-201) ----
-#if b_iSpecularLayerEnable
+#if (SC2_CORE_LAYER_Specular || b_iSpecularLayerEnable)
     {
         SLayerConfig cfg = setupSpecularLayer();
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sSpecularSampler_t, p_sSamp, 1.0f, vNormal, tp);
-    #if (b_iSpecularType == SPECULAR_A_ONLY)
-        #if (b_iDiffuseTeamColorMode == TEAMCOLOR_DIFFUSE) && b_useTeamColorSpecular
-        float a = lerp(psGlobals.cDiffuseTeamColor.a, cColor.a, fTeamColorAlpha);
-        cColor = float4(a, a, a, a);
-        #endif
-    #else
-        #if (b_iDiffuseTeamColorMode == TEAMCOLOR_DIFFUSE) && b_useTeamColorSpecular
-        cColor = float4(lerp(psGlobals.cDiffuseTeamColor.rgb, cColor.rgb, fTeamColorAlpha), 1.0f);
-        #endif
-    #endif
+    // The Diffuse layer's team-colour mode is read HERE as well as in its setup
+    // function, so it has to move through SC2_LAYER_TeamColorMode at both sites --
+    // a second, un-converted read is what makes a moved property look broken while
+    // the payload is in fact correct.
+    [branch] if (SC2_AXIS(b_useTeamColorSpecular)
+                 && SC2_LAYER_TeamColorMode(b_iDiffuseTeamColorMode) == TEAMCOLOR_DIFFUSE)
+    {
+        [branch] if (SC2_AXIS(b_iSpecularType) == SPECULAR_A_ONLY)
+        {
+            float a = lerp(psGlobals.cDiffuseTeamColor.a, cColor.a, fTeamColorAlpha);
+            cColor = float4(a, a, a, a);
+        }
+        else
+        {
+            cColor = float4(lerp(psGlobals.cDiffuseTeamColor.rgb, cColor.rgb, fTeamColorAlpha), 1.0f);
+        }
+    }
+        SC2_LAYER_GATE_Specular(cfg)
         cDeferredSpecular = combineLayerColor(cColor, cDeferredSpecular, cfg);
     }
 #endif
 
     // ---- Fake energy-conserving specular dim (psmaterial.fx:203-208) ----
-#if b_iFakeEnergyConservingSpec
+    [branch] if (SC2_AXIS(b_iFakeEnergyConservingSpec))
     {
         float powClamped = clamp(fSpecularity, 1.0f, 512.0f);
         float dim = saturate(-0.000004444f * powClamped * powClamped
                              + 0.004333f * powClamped + 0.0020834f);
         cDeferredSpecular *= dim;
     }
-#endif
 
     // ---- litOnly light-suppression (psmaterial.fx:212-217) ----
-#if b_litOnly && (b_useLighting == 0)
-    cLightDiffuse = float3(0, 0, 0);
-    cLightSpecular = float3(0, 0, 0);
+#if b_litOnly
+    [branch] if (SC2_AXIS(b_useLighting) == 0)
+    {
+        cLightDiffuse = float3(0, 0, 0);
+        cLightSpecular = float3(0, 0, 0);
+    }
 #endif
 
     // ---- Lightmap layer replaces the diffuse light (psmaterial.fx:221-229) ----
@@ -197,53 +266,71 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sLightmapSampler_t, p_sSamp, 1.0f, vNormal, tp) * 2.0f;
         cLightDiffuse = cColor.rgb;
         cLightSpecular = float3(0, 0, 0);
-    #if b_iLightmapShadow
-        cLightDiffuse *= lerp(psGlobals.cLightmapShadowColor, float3(1, 1, 1), cShadowColor.a);
-    #endif
+        [branch] if (SC2_AXIS(b_iLightmapShadow))
+            cLightDiffuse *= lerp(psGlobals.cLightmapShadowColor, float3(1, 1, 1), cShadowColor.a);
     }
 #endif
 
     // ---- Blend the lighting components (psmaterial.fx:233-238) ----
     float4 cFinal;
     cFinal.rgb = cDeferredDiffuse * cLightDiffuse;
-#if b_useLighting && b_useSpecular
-    cFinal.rgb += cDeferredSpecular * cLightSpecular;
-#else
-    cLightSpecular = float3(0, 0, 0);
-#endif
+    [branch] if (SC2_AXIS(b_useLighting) && SC2_AXIS(b_useSpecular))
+        cFinal.rgb += cDeferredSpecular * cLightSpecular;
+    else
+        cLightSpecular = float3(0, 0, 0);
 
     // ---- Emissive layers (psmaterial.fx:240-276), inside if(!b_litOnly) ----
 #if !b_litOnly
     bool bAdd = false;
-  #if b_iEmissiveLayerEnable
+  #if (SC2_CORE_LAYER_Emissive || b_iEmissiveLayerEnable)
     {
         SLayerConfig cfg = setupEmissiveLayer();
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sEmissiveSampler_t, p_sSamp, 1.0f, vNormal, tp);
-    #if (b_iEmissiveOp == LAYEROP_MOD) || (b_iEmissiveOp == LAYEROP_MOD2X) || (b_iEmissiveOp == LAYEROP_LERP)
-        cFinal.rgb = combineLayerColor(cColor, cFinal.rgb, cfg);
-    #else
-        cEmissive = combineLayerColor(cColor, cEmissive, cfg);
-        bAdd = true;
-    #endif
+        // Which accumulator the emissive layer feeds depends on its blend op, so
+        // the op is read here as well as inside setupEmissiveLayer().
+        const int sc2EmOp = SC2_LAYER_Op(b_iEmissiveOp);
+        // The gate has to cover `bAdd` too, not just the two combines: a disabled
+        // core layer that still set bAdd would pull the multiplier arm below in.
+        SC2_LAYER_GATE_Emissive(cfg)
+        {
+            [branch] if (sc2EmOp == LAYEROP_MOD || sc2EmOp == LAYEROP_MOD2X
+                         || sc2EmOp == LAYEROP_LERP)
+            {
+                cFinal.rgb = combineLayerColor(cColor, cFinal.rgb, cfg);
+            }
+            else
+            {
+                cEmissive = combineLayerColor(cColor, cEmissive, cfg);
+                bAdd = true;
+            }
+        }
     }
   #endif
-  #if b_iEmissive2LayerEnable
+  #if (SC2_CORE_LAYER_Emissive2 || b_iEmissive2LayerEnable)
     {
         SLayerConfig cfg = setupEmissive2Layer();
         float4 cColor = getLayerColor2D(vertOut, cfg, p_sEmissive2Sampler_t, p_sSamp, 1.0f, vNormal, tp);
-    #if (b_iEmissive2Op == LAYEROP_MOD) || (b_iEmissive2Op == LAYEROP_MOD2X) || (b_iEmissive2Op == LAYEROP_LERP)
-        if (!bAdd)
-            cFinal.rgb = combineLayerColor(cColor, cFinal.rgb, cfg);
-        else { cEmissive = combineLayerColor(cColor, cEmissive, cfg); bAdd = true; }
-    #else
-        cEmissive = combineLayerColor(cColor, cEmissive, cfg);
-        bAdd = true;
-    #endif
+        const int sc2Em2Op = SC2_LAYER_Op(b_iEmissive2Op);
+        SC2_LAYER_GATE_Emissive2(cfg)
+        {
+            [branch] if (sc2Em2Op == LAYEROP_MOD || sc2Em2Op == LAYEROP_MOD2X
+                         || sc2Em2Op == LAYEROP_LERP)
+            {
+                if (!bAdd)
+                    cFinal.rgb = combineLayerColor(cColor, cFinal.rgb, cfg);
+                else { cEmissive = combineLayerColor(cColor, cEmissive, cfg); bAdd = true; }
+            }
+            else
+            {
+                cEmissive = combineLayerColor(cColor, cEmissive, cfg);
+                bAdd = true;
+            }
+        }
     }
   #endif
     if (bAdd)
     {
-    #if b_iEmissiveLayerEnable || b_iEmissive2LayerEnable
+    #if (SC2_CORE_LAYER_Emissive || b_iEmissiveLayerEnable || SC2_CORE_LAYER_Emissive2 || b_iEmissive2LayerEnable)
         cEmissive = cEmissive * psGlobals.fEmissiveMultiplier;
     #endif
         cFinal.rgb += cEmissive.rgb;
@@ -298,44 +385,45 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
         cMaskValue = cColorE.a;
     #endif
 
-    #if b_iEnvioMultipliers
+    [branch] if (SC2_AXIS(b_iEnvioMultipliers))
+    {
         float3 cConstant = cColorE.rgb * psGlobals.vEnvioConstantDiffSpec.x;
         cConstant += cColorE.rgb * cLightDiffuse * psGlobals.vEnvioConstantDiffSpec.y;
         cConstant += cColorE.rgb * cLightSpecular * psGlobals.vEnvioConstantDiffSpec.z;
         cFinal.rgb = applyEnv(cFinal.rgb, cConstant, cMaskValue, cfgE.b_iOp);
         cDeferredDiffuse = applyEnv(cDeferredDiffuse, cColorE.rgb * psGlobals.vEnvioConstantDiffSpec.y, cMaskValue, cfgE.b_iOp);
         cDeferredSpecular = applyEnv(cDeferredSpecular, cColorE.rgb * psGlobals.vEnvioConstantDiffSpec.z, cMaskValue, cfgE.b_iOp);
-    #else
+    }
+    else
+    {
         cFinal.rgb = applyEnv(cFinal.rgb, cColorE.rgb, cMaskValue, cfgE.b_iOp);
-    #endif
+    }
     }
 #endif
 
     // ---- Tinting (psmaterial.fx:342-349), inside if(!b_litOnly) ----
 #if !b_litOnly
-  #if b_useVertexColors
+    [branch] if (SC2_AXIS(b_useVertexColors))
     {
         float3 cVertex = saturate(vertOut.VertexColor().xyz);
         cFinal.rgb *= cVertex;
         cDeferredDiffuse.rgb *= cVertex;
     }
-  #endif
     cFinal.rgb *= psGlobals.fMaterialTint;
     cDeferredDiffuse.rgb *= psGlobals.fMaterialTint;
 #endif
 
     // ---- Alpha (psmaterial.fx:354-361) ----
     cFinal.a = 1.0f;
-#if b_useVertexAlpha
-    cFinal.a *= saturate(vertOut.VertexColor().a);
-#endif
+    [branch] if (SC2_AXIS(b_useVertexAlpha))
+        cFinal.a *= saturate(vertOut.VertexColor().a);
     cFinal.a *= psGlobals.vSpecularMultiplier_DepthBlendThreshold_HeightMapScale_AlphaFactor.w;
     // SplatAttenuationProjector (psmaterial.fx:359-361 -> common.fx:81-88).  Splat
     // families (SplatDirect/SplatDeferred) enable this; the VS packs the plane into
     // VectorUI0, worldPos into VectorUI1.xyz, halfHeight into VectorUI1.w and
     // minHeight into Tangent.w (splatdirect.fx:215-218).  PIXEL_SHADER_VERSION >= PS_30
     // is always true for the ps_5_0 target, so only b_splatAttenuationEnabled gates it.
-#if b_splatAttenuationEnabled
+    [branch] if (SC2_AXIS(b_splatAttenuationEnabled))
     {
         float3 saWorldPos = vertOut.VectorUI1().xyz;
         float4 saPlane = vertOut.VectorUI0();
@@ -344,7 +432,6 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
         float saD = abs(dot(float4(saWorldPos, 1.0f), saPlane));
         cFinal.a *= saturate((saHalfHeight - saD) / (saHalfHeight - saMinHeight));
     }
-#endif
 
     // Soft/depth blend (psmaterial.fx:365-372): fade the alpha toward 0 as the
     // fragment approaches the prepass depth (a.k.a. soft particles).  PIXEL_SHADER_VERSION
@@ -364,28 +451,28 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
     float fade = cFinal.a;
 
     // ---- Alpha mask layers (psmaterial.fx:380-390) ----
-#if b_iAlphaMaskLayerEnable
+#if (SC2_CORE_LAYER_AlphaMask || b_iAlphaMaskLayerEnable)
     {
         SLayerConfig cfg = setupAlphaMaskLayer();
+        SC2_LAYER_GATE_AlphaMask(cfg)
         cFinal.a *= getLayerColor2D(vertOut, cfg, p_sAlphaMaskSampler_t, p_sSamp, 1.0f, vNormal, tp).a;
     }
 #endif
-#if b_iAlphaMask2LayerEnable
+#if (SC2_CORE_LAYER_AlphaMask2 || b_iAlphaMask2LayerEnable)
     {
         SLayerConfig cfg = setupAlphaMask2Layer();
         // Epsilon works around a shader-compiler bug (psmaterial.fx:389).
+        SC2_LAYER_GATE_AlphaMask2(cfg)
         cFinal.a *= (getLayerColor2D(vertOut, cfg, p_sAlphaMask2Sampler_t, p_sSamp, 1.0f, vNormal, tp).a + 0.00000001f);
     }
 #endif
 
-#if !b_useBlendAdd
-    fade = cFinal.a;
-#endif
+    [branch] if (!SC2_AXIS(b_useBlendAdd))
+        fade = cFinal.a;
 
     // ---- ModAlpha premultiply (psmaterial.fx:396-397) ----
-#if b_iModAlpha
-    cFinal.rgb *= fade;
-#endif
+    [branch] if (SC2_AXIS(b_iModAlpha))
+        cFinal.rgb *= fade;
 
     // The deferred specular output carries the material specular multiplier (it is
     // pre-baked into the light's specular for the forward blend, so applied here
@@ -399,9 +486,8 @@ float4 materialColor(ModelPSInput vertOut, float3 vNormal,
 
     // Clamp the final colour to [0,1] (psmaterial.fx:432) — the g-buffer outputs are
     // NOT clamped by this axis (only cFinal).
-#if b_iClampOutput
-    cFinal = saturate(cFinal);
-#endif
+    [branch] if (SC2_AXIS(b_iClampOutput))
+        cFinal = saturate(cFinal);
     return cFinal;
 }
 
@@ -460,9 +546,8 @@ float4 mainShading(ModelPSInput vertOut, out DeferredOutputs def)
     // DecodeNormal once (psmainshading.fx:139), fed to BOTH lighting and material
     // (the fresnel term), matching the reference's single decode.
     float3 vDeferredNormal = decodeNormal(vertOut);
-#if b_iNormalBlending
-    vDeferredNormal = normalBlending(vertOut, vDeferredNormal, tp);
-#endif
+    [branch] if (SC2_AXIS(b_iNormalBlending))
+        vDeferredNormal = normalBlending(vertOut, vDeferredNormal, tp);
     def.vNormal = vDeferredNormal;
 
     // Decode AO (psmainshading.fx:147): the AO material layer writes def.cAO and the
@@ -486,11 +571,12 @@ float4 mainShading(ModelPSInput vertOut, out DeferredOutputs def)
 
     // Unlit override (psmainshading.fx:175-179): the deferred outputs collapse when
     // lighting is off.  Folds away for the lit class under test.
-#if b_useLighting == 0
-    def.cDiffuse = float3(0, 0, 0);
-    def.cSpecular = float3(0, 0, 0);
-    def.cSpecularPower = 1.0f;
-#endif
+    [branch] if (SC2_AXIS(b_useLighting) == 0)
+    {
+        def.cDiffuse = float3(0, 0, 0);
+        def.cSpecular = float3(0, 0, 0);
+        def.cSpecularPower = 1.0f;
+    }
 
     // Fog (runs when b_iDebugMode == NO_DEBUG, true on the transcribed perms).  The
     // lighting-region map (cLightingRegionMap) selects the per-region fog colours.
@@ -512,17 +598,15 @@ float4 mainShading(ModelPSInput vertOut, out DeferredOutputs def)
 
     // 8-bit HDR scaling (psmainshading.fx:192) — always applied when set (not
     // gated on debug, unlike fog/FOW).
-#if b_iUse8BitHDR
-    cResult.rgb *= psGlobals.vHDRScaling.x;
-#endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDR))
+        cResult.rgb *= psGlobals.vHDRScaling.x;
 
     // Write fog density into red (psmainshading.fx:195-197) — a special output mode
     // (soft-fog density readback, used by Particle/Ribbon perms): after fog/FOW/HDR,
     // overwrite red with the fog alpha.  The debug-mode half of the .fx guard is
     // NO_DEBUG on every transcribed perm, so only the axis gates it here.
-#if b_iWriteFogDensityIntoRed
-    cResult.r = saturate(vertOut.FogColor().w);
-#endif
+    [branch] if (SC2_AXIS(b_iWriteFogDensityIntoRed))
+        cResult.r = saturate(vertOut.FogColor().w);
 
     // ---------- halo (psmainshading.fx:199-200) ----------
     // A separate arm that replaces cResult with the screen-space halo strobe.  In the
@@ -536,9 +620,8 @@ float4 mainShading(ModelPSInput vertOut, out DeferredOutputs def)
     // ---------- terrain (psmainshading.fx:204-207) ----------
 #elif (b_iShadingMode == SHADINGMODE_TERRAIN)
     cResult = shadeTerrain(vertOut, def);
-  #if b_iUse8BitHDR && !b_computeHeight && !b_no8BitHDR
-    cResult.rgb *= psGlobals.vHDRScaling.x;
-  #endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDR) && !SC2_AXIS(b_computeHeight) && !SC2_AXIS(b_no8BitHDR))
+        cResult.rgb *= psGlobals.vHDRScaling.x;
 
     // ---------- displacement (psmainshading.fx:211-213) ----------
 #elif (b_iShadingMode == SHADINGMODE_DISPLACEMENT)
@@ -550,9 +633,8 @@ float4 mainShading(ModelPSInput vertOut, out DeferredOutputs def)
     // ---------- vector UI (psmainshading.fx:217-220) ----------
 #elif (b_iShadingMode == SHADINGMODE_VECTORUI)
     cResult = vectorUI(vertOut);
-  #if b_iUse8BitHDR
-    cResult.rgb *= psGlobals.vHDRScaling.x;
-  #endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDR))
+        cResult.rgb *= psGlobals.vHDRScaling.x;
 
     // ---------- volume (psmainshading.fx:223-224) ----------
 #elif (b_iShadingMode == SHADINGMODE_VOLUME)

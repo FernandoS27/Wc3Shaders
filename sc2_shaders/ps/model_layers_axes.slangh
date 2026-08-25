@@ -1,0 +1,269 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026, Fernando Sahmkow
+// See LICENSE in the repository root for full terms.
+//
+// Per-PROPERTY accessors for the material-layer axes (plan milestone R5).
+//
+// psmaterial.fx gives every layer 17 properties.  Fourteen of them only select
+// data inside a code path the shader has already taken -- SLayerConfig in
+// ps/model_material.slang already carries each as a runtime `int`, and
+// computeLayerColorInternal / combineLayerColor already branch on it.  They
+// constant-fold today only because the value arrives as a `#define`.
+//
+// Three do not move as ordinary properties:
+//   LayerEnable        gates whether the layer's TEXTURE is sampled -- an SRV.  It
+//                      moves per LAYER instead, for the CORE layers only; see the
+//                      core-layer section at the bottom of this file.
+//   UseConstantColor   same: with it set the layer reads no texture at all.
+//   TextureType        Texture2D vs TextureCube is a TYPE, not a value, so it stays
+//                      compile-time for every layer, core or not.
+//
+// Each moving property has its OWN switch, so R5 can flip exactly one at a time
+// and re-check that everything it did not flip is still bit-identical.  With a
+// switch off the macro expands to the axis token itself, so the preprocessor
+// output is unchanged.
+//
+// The `##` appears in the macro the CALL SITE names, never behind an indirection:
+// every axis also has a file-local `#ifndef b_iDiffuseOp / #define b_iDiffuseOp 0`,
+// so passing the name through a second macro would expand it before the paste and
+// produce `SC2_PERMOFF_0`.
+
+#ifndef SC2_MODEL_LAYER_AXES_H
+#define SC2_MODEL_LAYER_AXES_H
+
+#include "types/perm_cb.slangh"
+// Generated layer bit-offsets (tools/sc2_perm_reduce.py --emit-layout).
+#include "types/perm_layout.slangh"
+
+// One shared switch for the whole DefaultPixelMain group: these files serve
+// Model, Particle, Ribbon, Foliage, SplatDirect and SplatDeferred at once, so a
+// per-family name here would need six copies of every guard.
+#ifndef SC2_USE_PERM_CB_Default
+#define SC2_USE_PERM_CB_Default 0
+#endif
+
+#ifndef SC2_PERM_PROP_LayerId
+#define SC2_PERM_PROP_LayerId 0
+#endif
+#ifndef SC2_PERM_PROP_UseMask
+#define SC2_PERM_PROP_UseMask 0
+#endif
+#ifndef SC2_PERM_PROP_ChannelSelect
+#define SC2_PERM_PROP_ChannelSelect 0
+#endif
+#ifndef SC2_PERM_PROP_TeamColorMode
+#define SC2_PERM_PROP_TeamColorMode 0
+#endif
+#ifndef SC2_PERM_PROP_Invert
+#define SC2_PERM_PROP_Invert 0
+#endif
+#ifndef SC2_PERM_PROP_Clamp
+#define SC2_PERM_PROP_Clamp 0
+#endif
+#ifndef SC2_PERM_PROP_FresnelMode
+#define SC2_PERM_PROP_FresnelMode 0
+#endif
+#ifndef SC2_PERM_PROP_FresnelTransformMode
+#define SC2_PERM_PROP_FresnelTransformMode 0
+#endif
+#ifndef SC2_PERM_PROP_FresnelSaturate
+#define SC2_PERM_PROP_FresnelSaturate 0
+#endif
+#ifndef SC2_PERM_PROP_Op
+#define SC2_PERM_PROP_Op 0
+#endif
+#ifndef SC2_PERM_PROP_UVEmitter
+#define SC2_PERM_PROP_UVEmitter 0
+#endif
+#ifndef SC2_PERM_PROP_UVMapping
+#define SC2_PERM_PROP_UVMapping 0
+#endif
+#ifndef SC2_PERM_PROP_IsRTTTexture
+#define SC2_PERM_PROP_IsRTTTexture 0
+#endif
+#ifndef SC2_PERM_PROP_TriPlanarUvId
+#define SC2_PERM_PROP_TriPlanarUvId 0
+#endif
+
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_LayerId
+  #define SC2_LAYER_LayerId(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_LayerId(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_UseMask
+  #define SC2_LAYER_UseMask(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_UseMask(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_ChannelSelect
+  #define SC2_LAYER_ChannelSelect(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_ChannelSelect(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_TeamColorMode
+  #define SC2_LAYER_TeamColorMode(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_TeamColorMode(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_Invert
+  #define SC2_LAYER_Invert(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_Invert(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_Clamp
+  #define SC2_LAYER_Clamp(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_Clamp(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_FresnelMode
+  #define SC2_LAYER_FresnelMode(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_FresnelMode(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_FresnelTransformMode
+  #define SC2_LAYER_FresnelTransformMode(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_FresnelTransformMode(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_FresnelSaturate
+  #define SC2_LAYER_FresnelSaturate(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_FresnelSaturate(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_Op
+  #define SC2_LAYER_Op(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_Op(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_UVEmitter
+  #define SC2_LAYER_UVEmitter(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_UVEmitter(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_UVMapping
+  #define SC2_LAYER_UVMapping(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_UVMapping(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_IsRTTTexture
+  #define SC2_LAYER_IsRTTTexture(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_IsRTTTexture(name) (name)
+#endif
+#if SC2_USE_PERM_CB_Default && SC2_PERM_PROP_TriPlanarUvId
+  #define SC2_LAYER_TriPlanarUvId(name) ((int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name))
+#else
+  #define SC2_LAYER_TriPlanarUvId(name) (name)
+#endif
+
+// ---- Core layers (plan milestone R7) ---------------------------------------
+//
+// A CORE layer is compiled in for every class of its family, whether or not the
+// material uses it.  That is what lets LayerEnable and UseConstantColor -- the two
+// properties that decide whether the layer's TEXTURE is sampled -- stop being
+// interface-bearing and become ordinary payload data, which is worth more class
+// reduction than all fourteen of the properties above put together.
+//
+// The bargain: the class samples a texture the material may not use, and then
+// throws the result away under `if (cfg.b_iLayerEnable)`.  Everything rests on that
+// discard being real, so it is measured rather than argued -- see
+// `sc2_perm_reduce.py --t6`, which runs the class twice with DIFFERENT texture
+// models for the not-enabled layers and requires bit-identical SV_Target.
+//
+// The switch is per LAYER, not per property: a non-core layer in the same shader
+// still reads both from its `#define`, because for that layer the texture really is
+// absent.  `tools/sc2_perm_reduce.py --emit-layout` allocates payload bits for
+// LayerEnable/UseConstantColor on every layer regardless, so the offsets below
+// resolve even where the ternary folds to the literal.
+#ifndef SC2_CORE_LAYER_Diffuse
+#define SC2_CORE_LAYER_Diffuse 0
+#endif
+#ifndef SC2_CORE_LAYER_Emissive
+#define SC2_CORE_LAYER_Emissive 0
+#endif
+#ifndef SC2_CORE_LAYER_Emissive2
+#define SC2_CORE_LAYER_Emissive2 0
+#endif
+#ifndef SC2_CORE_LAYER_AlphaMask
+#define SC2_CORE_LAYER_AlphaMask 0
+#endif
+#ifndef SC2_CORE_LAYER_AlphaMask2
+#define SC2_CORE_LAYER_AlphaMask2 0
+#endif
+#ifndef SC2_CORE_LAYER_Specular
+#define SC2_CORE_LAYER_Specular 0
+#endif
+#ifndef SC2_CORE_LAYER_SpecularExponent
+#define SC2_CORE_LAYER_SpecularExponent 0
+#endif
+#ifndef SC2_CORE_LAYER_AmbientOcclusion
+#define SC2_CORE_LAYER_AmbientOcclusion 0
+#endif
+#ifndef SC2_CORE_LAYER_Decal
+#define SC2_CORE_LAYER_Decal 0
+#endif
+
+// Both `Layer` and `name` are pasted by the macro the CALL SITE names, never behind
+// an indirection -- `name` is itself a `#define`d axis, and one more level of
+// expansion would paste `SC2_PERMOFF_0`.  See the file header.
+#if SC2_USE_PERM_CB_Default
+  #define SC2_CORE_ENABLE(Layer, name) (SC2_CORE_LAYER_##Layer ? (int)sc2PermBits(SC2_PERMOFF_##name, SC2_PERMW_##name) : (name))
+#else
+  #define SC2_CORE_ENABLE(Layer, name) (name)
+#endif
+
+// The CONTRIBUTION gate itself, as a macro that expands to NOTHING when the layer
+// is not core.  Spelling it `[branch] if (cfg.b_iLayerEnable)` unconditionally
+// would be correct -- non-core, the condition is the literal 1 and folds -- but it
+// is not FREE: slangc still forms the block, and the scheduler then moved two
+// instructions in Ribbon_ps.  Nothing wrong with the code, and no way to tell that
+// from a bit-identity gate, which is the point: with the macro empty the non-core
+// text is what it always was, so "switched off changes nothing" stays a structural
+// property instead of an observation.
+#if SC2_CORE_LAYER_Diffuse
+  #define SC2_LAYER_GATE_Diffuse(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_Diffuse(cfg)
+#endif
+#if SC2_CORE_LAYER_Emissive
+  #define SC2_LAYER_GATE_Emissive(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_Emissive(cfg)
+#endif
+#if SC2_CORE_LAYER_Emissive2
+  #define SC2_LAYER_GATE_Emissive2(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_Emissive2(cfg)
+#endif
+#if SC2_CORE_LAYER_AlphaMask
+  #define SC2_LAYER_GATE_AlphaMask(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_AlphaMask(cfg)
+#endif
+#if SC2_CORE_LAYER_AlphaMask2
+  #define SC2_LAYER_GATE_AlphaMask2(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_AlphaMask2(cfg)
+#endif
+#if SC2_CORE_LAYER_Specular
+  #define SC2_LAYER_GATE_Specular(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_Specular(cfg)
+#endif
+#if SC2_CORE_LAYER_SpecularExponent
+  #define SC2_LAYER_GATE_SpecularExponent(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_SpecularExponent(cfg)
+#endif
+#if SC2_CORE_LAYER_AmbientOcclusion
+  #define SC2_LAYER_GATE_AmbientOcclusion(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_AmbientOcclusion(cfg)
+#endif
+#if SC2_CORE_LAYER_Decal
+  #define SC2_LAYER_GATE_Decal(cfg) [branch] if ((cfg).b_iLayerEnable)
+#else
+  #define SC2_LAYER_GATE_Decal(cfg)
+#endif
+
+#endif // SC2_MODEL_LAYER_AXES_H

@@ -16,6 +16,7 @@
 // the FLOAT permutations silently decode as RGBA.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #ifndef b_iInEncoding
 #define b_iInEncoding 0
@@ -27,18 +28,20 @@ implementing sc2_shaders;
 // pscommon.fx : DecodeNormal(vNormalDepth, false).
 float3 psDecodeNormal(float4 vNormalDepth)
 {
-#if (b_iInEncoding == DEPTH_NORMAL_ENCODING_RGBA)
-    float3 vNormal;
-    vNormal.xz = 2.0f * vNormalDepth.rg - 1.0f;
-    vNormal.y = -sqrt(max(0, 1 - dot(vNormal.xz, vNormal.xz)));
-    vNormal = mul((float3x3)psGlobals.mInvViewTransform, vNormal);
-    vNormal = normalize(vNormal);
-    return vNormal.rgb;
-#elif (b_iInEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
-    return 2.0f * vNormalDepth.rgb - 1.0f;
-#else   // DEPTH_NORMAL_ENCODING_FLOAT (and the trailing `else -> 0`, folded here)
+    const int iInEncoding = SC2_AXIS(b_iInEncoding);
+    [branch] if (iInEncoding == DEPTH_NORMAL_ENCODING_RGBA)
+    {
+        float3 vNormal;
+        vNormal.xz = 2.0f * vNormalDepth.rg - 1.0f;
+        vNormal.y = -sqrt(max(0, 1 - dot(vNormal.xz, vNormal.xz)));
+        vNormal = mul((float3x3)psGlobals.mInvViewTransform, vNormal);
+        vNormal = normalize(vNormal);
+        return vNormal.rgb;
+    }
+    [branch] if (iInEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
+        return 2.0f * vNormalDepth.rgb - 1.0f;
+    // DEPTH_NORMAL_ENCODING_FLOAT (and the trailing `else -> 0`, folded here)
     return vNormalDepth.rgb;
-#endif
 }
 
 // pscommon.fx : SampleNormalDepth — .a is the decoded depth, .rgb the decoded normal.

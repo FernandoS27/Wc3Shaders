@@ -19,3 +19,12 @@ research
 *.air
 *.err
 tools\_sc2*
+*.bls
+wow_re_shaders
+agent_logs
+# crc_collide: generated wordlists and the compiled CUDA kernel
+tools/crc_collide/words.txt
+tools/crc_collide/words_engine.txt
+tools/crc_collide/seeds.txt
+tools/crc_collide/crc3.exe
+tools/crc_collide/__pycache__

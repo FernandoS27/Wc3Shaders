@@ -30,6 +30,40 @@
 implementing sc2_shaders;
 
 #include "vs/model_vs_defines.slangh"
+#include "types/perm_cb.slangh"
+
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_clampTail
+#define b_clampTail 0
+#endif
+#ifndef b_computeUFromAge
+#define b_computeUFromAge 0
+#endif
+#ifndef b_gpuSplineRibbon
+#define b_gpuSplineRibbon 0
+#endif
+#ifndef b_iRibbonColorInterpolation
+#define b_iRibbonColorInterpolation 0
+#endif
+#ifndef b_iRibbonSizeInterpolation
+#define b_iRibbonSizeInterpolation 0
+#endif
+#ifndef b_precomputedAge
+#define b_precomputedAge 0
+#endif
+#ifndef b_precomputedTangent
+#define b_precomputedTangent 0
+#endif
+#ifndef b_proceduralPosition
+#define b_proceduralPosition 0
+#endif
+#ifndef b_ribbonLocalSpace
+#define b_ribbonLocalSpace 0
+#endif
+#ifndef b_splineRibbon
+#define b_splineRibbon 0
+#endif
 
 // ---------------------------------------------------------------------------
 // ribbon.fx : VertDecl — the vertex declaration, reshaped by b_iRibbonSimTech.
@@ -206,7 +240,7 @@ float4 vsEmitRibbonVertexColor(RibbonVSVertex vertIn, float fAge, int iBatchInde
         vsGlobals.vMidKeyTimes[iBatchIndex].y,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].y,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].y,
-        b_iRibbonColorInterpolation);
+        SC2_AXIS(b_iRibbonColorInterpolation));
 
     cColor.a = vsInterpolateValue(
         fAge,
@@ -214,7 +248,7 @@ float4 vsEmitRibbonVertexColor(RibbonVSVertex vertIn, float fAge, int iBatchInde
         vsGlobals.vMidKeyTimes[iBatchIndex].z,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].z,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].z,
-        b_iRibbonColorInterpolation);
+        SC2_AXIS(b_iRibbonColorInterpolation));
 
     if (b_tintRibbonRed)
         cColor = float4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -265,7 +299,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
 
     // Remap to the proper batch slot — GPU spline ribbons are already direct.
     iBatchIndex = (int)vertIn.iBatchIndex.x;
-    if (!b_gpuSplineRibbon)
+    if (!SC2_AXIS(b_gpuSplineRibbon))
         iBatchIndex = (int)vsGlobals.fRibbonBatchIndexRemappingTable[iBatchIndex];
 
     if (b_compressedVertex)
@@ -293,7 +327,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
     float3 vOffset = float3(0, 0, 0);
 
     // --- spline ribbon path ------------------------------------------------
-    if (b_gpuSplineRibbon)
+    if (SC2_AXIS(b_gpuSplineRibbon))
     {
         fAge = vertIn.vPosition.x;
 
@@ -342,7 +376,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
     {
         float proceduralScalar = 1.0;    // set to 0 if clamped
 
-        if (b_precomputedAge)
+        if (SC2_AXIS(b_precomputedAge))
         {
             fAge = vertIn.vPosition.w;
         }
@@ -350,7 +384,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
         {
             float ageScalar = 1.0;
 
-            if (!b_ribbonLocalSpace)
+            if (!SC2_AXIS(b_ribbonLocalSpace))
             {
                 // clamp the head
                 {
@@ -366,7 +400,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
                 }
 
                 // clamp the tail
-                if (b_clampTail)
+                if (SC2_AXIS(b_clampTail))
                 {
                     float ageDelta = vsGlobals.vLockedTailPositionAndTime[iBatchIndex].w
                                    - vertIn.vPosition.w;
@@ -381,7 +415,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
                 }
             }
 
-            if (b_clampTail)
+            if (SC2_AXIS(b_clampTail))
                 ageScalar = vsGlobals.vGPURibbonValues[iBatchIndex].w;
 
             fAge = (vsGlobals.vGPURibbonValues[iBatchIndex].x - vertIn.vPosition.w)
@@ -389,7 +423,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
             fAge = saturate(fAge * ageScalar);
         }
 
-        if (b_proceduralPosition)
+        if (SC2_AXIS(b_proceduralPosition))
         {
             float fMass = vsGlobals.vSystemPhysicsConstants[iBatchIndex].x;
             float fInvMass = vsGlobals.vSystemPhysicsConstants[iBatchIndex].y;
@@ -406,7 +440,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
                                               vOffsetFromOrigin, vInstantaneousVelocity);
             vertIn.vPosition.xyz += (proceduralScalar * vOffsetFromOrigin);
 
-            if (b_precomputedTangent)
+            if (SC2_AXIS(b_precomputedTangent))
                 vTangent = vertIn.vPositionPrev.xyz;
             else
                 vTangent = -vInstantaneousVelocity;
@@ -418,9 +452,9 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
         vertIn.vPosition.xyz = mul(float4(vertIn.vPosition.xyz, 1),
                                    vsRibbonInstanceMatrix(iBatchIndex)).xyz;
 
-    if (b_computeUFromAge)
+    if (SC2_AXIS(b_computeUFromAge))
     {
-        if (b_gpuSplineRibbon)
+        if (SC2_AXIS(b_gpuSplineRibbon))
         {
             vertIn.vUV.x = 1.0f - fAge;
         }
@@ -437,11 +471,11 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
         vsGlobals.vMidKeyTimes[iBatchIndex].x,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].x,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].x,
-        b_iRibbonSizeInterpolation);
+        SC2_AXIS(b_iRibbonSizeInterpolation));
 
     fSize = fSize * 0.5f;
 
-    if (!b_proceduralPosition && !b_gpuSplineRibbon)
+    if (!SC2_AXIS(b_proceduralPosition) && !SC2_AXIS(b_gpuSplineRibbon))
     {
         float3 vPrevSegmentDir = vertIn.vPosition.xyz - vertIn.vPositionPrev.xyz;
         float3 vNextSegmentDir = vertIn.vPositionNext.xyz - vertIn.vPosition.xyz;
@@ -454,14 +488,14 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
     vTangent = vsSafeNormalize(vTangent, float3(1, 0, 0));
 
     // compute binormal
-    if ((!b_splineRibbon) && (!b_proceduralPosition || b_precomputedTangent
+    if ((!SC2_AXIS(b_splineRibbon)) && (!SC2_AXIS(b_proceduralPosition) || SC2_AXIS(b_precomputedTangent)
                               || b_iRibbonSimTech == RIBBON_SIM_MIXED))
     {
         if (b_iRibbonType == RIBBON_BILLBOARD)
         {
             // put the camera forward into the ribbon's local space first
             float3 cameraDir = vsGlobals.vCameraDirection.xyz;
-            if (b_ribbonLocalSpace)
+            if (SC2_AXIS(b_ribbonLocalSpace))
                 cameraDir.xyz = mul(vsGlobals.vCameraDirection.xyz,
                                     (float3x3)(vsInvPRWorldMatrix(iBatchIndex)));
 
@@ -479,7 +513,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
         if (b_iRibbonType == RIBBON_BILLBOARD)
         {
             float3 cameraDir = vsGlobals.vCameraDirection.xyz;
-            if (b_ribbonLocalSpace)
+            if (SC2_AXIS(b_ribbonLocalSpace))
                 cameraDir.xyz = mul(vsGlobals.vCameraDirection.xyz,
                                     (float3x3)(vsInvPRWorldMatrix(iBatchIndex)));
 
@@ -538,7 +572,7 @@ public DefaultVSOutput ribbon_vs_main(RibbonVSStreamIn vertLayout)
 
     vertIn.vPosition.xyz = vertIn.vPosition.xyz + vOffset * fSize;
 
-    if (b_ribbonLocalSpace)
+    if (SC2_AXIS(b_ribbonLocalSpace))
     {
         float4x4 mPRWorld = vsPRWorldMatrix(iBatchIndex);
         vertIn.vPosition.xyz = mul(float4(vertIn.vPosition.xyz, 1.0f), mPRWorld).xyz;

@@ -38,6 +38,13 @@ implementing sc2_shaders;
 #define MAX_POINT_LIGHTS                   3
 #define MAX_SPOTLIGHTS                     7
 
+#include "types/perm_cb.slangh"
+// SC2_CORE_LAYER_* / SC2_LAYER_GATE_* for the two layers evaluated here.  The
+// `-D` a core class carries would define them anyway, but a `#define` does NOT
+// cross an `__include`, so without this the DEFAULTS would be missing and a
+// future `SC2_LAYER_GATE_` here would expand to an undeclared function call.
+#include "ps/model_layers_axes.slangh"
+
 #ifndef b_useLighting
 #define b_useLighting 0
 #endif
@@ -94,10 +101,25 @@ struct LightResult
 float materialSpecularity(ModelPSInput vertOut, float3 vDeferredNormal,
                           out float cDeferredGlossiness, TriPlanarUVs tp)
 {
-#if b_iSpecularExponentLayerEnable
+#if (SC2_CORE_LAYER_SpecularExponent || b_iSpecularExponentLayerEnable)
     SLayerConfig cfg = setupSpecularExponentLayer();
     float4 cClr = getLayerColor2D(vertOut, cfg, p_sSpecularExponentSampler_t,
                                   p_sSamp, 1.0f, vDeferredNormal, tp);
+    // Written as an EARLY-OUT under `#if SC2_CORE_LAYER_`, not as an `if/else`
+    // around the whole body: with the layer non-core the gate is absent and the
+    // remaining text is character-for-character what it was, so the non-core blob
+    // stays bit-identical.  Wrapping the body instead cost nothing semantically and
+    // still moved two instructions in Ribbon_ps -- a scheduler artifact, but one
+    // that makes the bit-identity gate report a difference it cannot explain.
+  #if SC2_CORE_LAYER_SpecularExponent
+    // An early-OUT rather than a gate around the body, for the same reason the gate
+    // macro exists: what follows must stay textually untouched when non-core.
+    [branch] if (!cfg.b_iLayerEnable)
+    {
+        cDeferredGlossiness = 1;
+        return psGlobals.vSpecColorSpecularity.w;
+    }
+  #endif
     cDeferredGlossiness = cClr.a;
     return cClr.a * cClr.a * psGlobals.vSpecColorSpecularity.w;
 #else
@@ -120,10 +142,16 @@ float decodeAOValue(ModelPSInput vertOut, float3 vDeferredNormal, inout float cD
                     TriPlanarUVs tp)
 {
     float fAmbientOcclusion;
-#if b_iAmbientOcclusionLayerEnable
+#if (SC2_CORE_LAYER_AmbientOcclusion || b_iAmbientOcclusionLayerEnable)
     SLayerConfig cfg = setupAmbientOcclusionLayer();
     fAmbientOcclusion = getLayerColor2D(vertOut, cfg, p_sAmbientOcclusionSampler_t,
                                         p_sSamp, 1.0f, vDeferredNormal, tp).a;
+  #if SC2_CORE_LAYER_AmbientOcclusion
+    // Same early-out shape as materialSpecularity above, and for the same reason.
+    [branch] if (!cfg.b_iLayerEnable)
+        fAmbientOcclusion = 1.0f;
+    else
+  #endif
     cDeferredAO = fAmbientOcclusion;
 #else
     fAmbientOcclusion = 1.0f;
@@ -144,9 +172,8 @@ float3 blinnShading(float3 vNormalWS, float3 vLightDirWS, bool bUseSpecular,
 {
     float3 ds;
     ds.x = dot(vNormalWS, vLightDirWS);
-#if b_useDblLambert
-    ds.x = -1.0f + ds.x * 2.0f;
-#endif
+    [branch] if (SC2_AXIS(b_useDblLambert))
+        ds.x = -1.0f + ds.x * 2.0f;
     if (bUseSpecular)
     {
         ds.y = saturate(dot(vNormalWS, vHalfVectorWS));
@@ -297,7 +324,7 @@ LightResult lighting(float3 vNormalWS, float3 vPositionWS, float fAmbientOcclusi
     // Key shadow light (directional 0), AddLightContribution(useSpecular=true).  ds.y
     // is 0 when b_iUseSpecular is off (BlinnShading), so the specular add folds away.
     float3 ds0 = blinnShading(vNormalWS, -psGlobals.directionalLights[0].vDirection.xyz,
-                              b_iUseSpecular, vHalfVecWS, fSpecularity);
+                              SC2_AXIS(b_iUseSpecular) != 0, vHalfVecWS, fSpecularity);
     curTotalDiffuse += cDirectional[0] * ds0.x * cShadowColor.rgb;
     curTotalSpecular += cSpecular * ds0.y * cShadowColor.rgb;
 
@@ -307,20 +334,19 @@ LightResult lighting(float3 vNormalWS, float3 vPositionWS, float fAmbientOcclusi
     // Secondary directional lights (1 .. count-1); AddLightContribution's 4th arg is
     // fAmbientOcclusion (a scalar broadcast), diffuse only, no specular.  Unrolled by
     // the compile-time light count (constant indices — no dynamic local-array index).
-#if (b_iDirectionalLightCount > 1)
+    const int iDirectionalLightCount = SC2_AXIS(b_iDirectionalLightCount);
+    [branch] if (iDirectionalLightCount > 1)
     {
         float3 ds = blinnShading(vNormalWS, -psGlobals.directionalLights[1].vDirection.xyz,
                                  false, vHalfVecWS, fSpecularity);
         curTotalDiffuse += cDirectional[1] * ds.x * fAmbientOcclusion;
     }
-#endif
-#if (b_iDirectionalLightCount > 2)
+    [branch] if (iDirectionalLightCount > 2)
     {
         float3 ds = blinnShading(vNormalWS, -psGlobals.directionalLights[2].vDirection.xyz,
                                  false, vHalfVecWS, fSpecularity);
         curTotalDiffuse += cDirectional[2] * ds.x * fAmbientOcclusion;
     }
-#endif
 
     // Single-pass point + spot lights (PS side only in PIXEL_SINGLEPASS_LIGHTING_MODE);
     // AddLightContribution(useSpecular=isPerPixel=true, cShadowColor=1).
@@ -396,9 +422,8 @@ LightResult mainLighting(ModelPSInput vertOut, float3 vDeferredNormal,
     r.cLightingRegionMap = vLightingRegions;
 
     float3 vHalfVecWS = vertOut.HalfVec();
-    #if b_iNormalizeHalfVector
-    vHalfVecWS = normalize(vHalfVecWS);
-    #endif
+    [branch] if (SC2_AXIS(b_iNormalizeHalfVector))
+        vHalfVecWS = normalize(vHalfVecWS);
     // Vertex-based AO override (pslighting.fx:112-114): replaces the AO used for
     // lighting only (cDeferredAO from DecodeAOValue is unchanged).
     #if b_UseVertexBasedAmbientOcclusion

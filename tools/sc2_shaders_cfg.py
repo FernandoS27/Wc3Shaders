@@ -67,6 +67,83 @@ def bv_to_defines(bv):
     return ["%s=%d" % (k, int(v)) for k, v in sorted(bv.items()) if int(v)]
 
 
+# ---------------------------------------------------------------------------
+# Canonical interpolant slots (design section 4)
+# ---------------------------------------------------------------------------
+# Today the live interpolants are packed into TEXCOORD0,1,2... sorted by name, so
+# the register assignment depends on WHICH interpolants are live -- which welds each
+# PS permutation to one VS permutation and costs 970 distinct layouts for Model
+# alone.  Giving every interpolant a FIXED semantic index decouples the stages: D3D11
+# links a VS output to a PS input by semantic NAME, so any PS reading a SUBSET of
+# what the VS wrote links correctly, and the VS may then use a coarser transport
+# profile than the PS.
+#
+# The index is not a register number.  Registers are assigned by declaration order,
+# so a shader with three live interpolants still uses v0..v2 whatever their indices
+# are; only the linkage names change.  That is why indices above 31 are legal and
+# why this costs nothing.
+#
+# Slots must not collide AFTER slangc's x10 index inflation (see
+# sc2_slang_validate._norm_idx): a scalar at slot S is emitted as TEXCOORD(S*10) and
+# an array element e of a base-S array as TEXCOORD(S*10 + e), both of which
+# normalise back to S and S+e.  So the two ARRAYS are given bases far enough apart
+# that their element ranges cannot land on a scalar's slot.
+SC2_CANON_SLOT = {
+    # --- geometry basis -----------------------------------------------------
+    "Normal": 0, "Tangent": 1, "Binormal": 2,
+    # --- view / lighting vectors -------------------------------------------
+    "EyeToVertex": 3, "EyeToVertexFresnel": 4, "HalfVec": 5, "ViewPos": 6,
+    # --- shadow / fog-of-war ------------------------------------------------
+    "ShadowMapUV": 7, "FOWUV": 8, "FogColor": 9,
+    # --- vertex-stage lighting results -------------------------------------
+    "Diffuse": 10, "Specular": 11, "ShadowDiffuse": 12, "ShadowSpecular": 13,
+    "VertexColor": 14,
+    # --- triplanar / vector-UI ---------------------------------------------
+    "TriPlanarWeights": 15, "VectorUI0": 16, "VectorUI1": 17, "VectorUI2": 18,
+    "Vector4": 19,
+    # --- world / terrain ----------------------------------------------------
+    "WorldPos": 20, "TerrainUV": 21,
+    # --- parallax + screen-space feeds -------------------------------------
+    "ParallaxVector": 22, "HPosAsUV": 23, "BackBufferUV": 24,
+    "DownscaleUV0": 25, "DownscaleUV1": 26,
+}
+# The per-emitter UV array (<= 5 entries) and postprocessquad's per-tap blur-offset
+# array (<= 8) get bases whose element ranges are disjoint from the scalars and from
+# each other.
+SC2_CANON_UV_BASE = 32
+SC2_CANON_GBS_BASE = 40
+
+
+def use_canon_slots():
+    """Canonical slots are on by default; SC2_CANON_INTERP=0 restores the legacy
+    sorted-live-set packing.
+
+    Both legs of the validation harness read this ONE switch, because the
+    comparator aligns a varying by (semantic, index): moving only the candidate to
+    canonical slots would make each leg draw a different random value for the same
+    interpolant, which looks like a shading bug and is not one."""
+    return os.environ.get("SC2_CANON_INTERP", "1") != "0"
+
+
+def canon_slot_check():
+    """No two interpolants may share a normalised slot.  Called by the tests rather
+    than at import so a bad edit fails loudly instead of at the first compile."""
+    used = {}
+    for n, s in SC2_CANON_SLOT.items():
+        if s in used:
+            raise ValueError("canonical slot %d used by both %s and %s"
+                             % (s, used[s], n))
+        used[s] = n
+    for base, count, name in ((SC2_CANON_UV_BASE, 5, "UV"),
+                              (SC2_CANON_GBS_BASE, 8, "GaussianBlurSample")):
+        for e in range(count):
+            if base + e in used:
+                raise ValueError("array %s element %d lands on %s's slot %d"
+                                 % (name, e, used[base + e], base + e))
+            used[base + e] = "%s[%d]" % (name, e)
+    return len(used)
+
+
 def interp_defines(live, bv, stage="ps"):
     """slangc `-D` list describing the live interpolant transport for the shared-
     interpolant (DefaultPixelMain) families.
@@ -88,19 +165,23 @@ def interp_defines(live, bv, stage="ps"):
     import sc2_interp as ip
     scal = sorted(n for n in live if n in ip.INTERP_DIM)
     defs = []
+    canon = use_canon_slots()
     for i, n in enumerate(scal):
-        defs += ["SC2_HAS_%s=1" % n, "SC2_SEM_%s=TEXCOORD%d" % (n, i)]
+        slot = SC2_CANON_SLOT[n] if canon else i
+        defs += ["SC2_HAS_%s=1" % n, "SC2_SEM_%s=TEXCOORD%d" % (n, slot)]
     tc = len(scal)
     if "UV" in live:
         uvc = max(1, ip._uv_count(bv))
-        defs += ["SC2_HAS_UV=1", "SC2_SEM_UV=TEXCOORD%d" % tc,
+        defs += ["SC2_HAS_UV=1",
+                 "SC2_SEM_UV=TEXCOORD%d" % (SC2_CANON_UV_BASE if canon else tc),
                  "SC2_UV_COUNT=%d" % uvc]
         tc += uvc
     # The second array interpolant (postprocessquad.fx's per-tap blur offsets) sits
     # after the UV array — same order gen_preamble uses.
     if "GaussianBlurSample" in live:
         defs += ["SC2_HAS_GaussianBlurSample=1",
-                 "SC2_SEM_GaussianBlurSample=TEXCOORD%d" % tc,
+                 "SC2_SEM_GaussianBlurSample=TEXCOORD%d"
+                 % (SC2_CANON_GBS_BASE if canon else tc),
                  "SC2_GBS_COUNT=%d" % ip._gbs_count(bv)]
     # SV_IsFrontFace is a system-value input (no TEXCOORD slot), so it's gated
     # independently of the scalar packing.  gen_preamble: FrontFace live ->

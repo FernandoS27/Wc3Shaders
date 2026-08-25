@@ -13,6 +13,7 @@
 // the target-layout selection live in DefaultPixelMain (model_ps.slang).
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 // pscommon.fx depth/normal encoding selector.
 #define DEPTH_NORMAL_ENCODING_FLOAT   0
@@ -43,45 +44,52 @@ float4 encodeDepthNormal(float3 vNormal, float fDepth)
     vNormal = normalize(vNormal);
 #endif
 
-    float4 vNormalDepth;
-#if (b_iOutEncoding == DEPTH_NORMAL_ENCODING_FLOAT)
+    // b_emitMRT* stay compile-time -- they ARE the output signature (K2).  Only the
+    // ENCODING moves, so each arm keeps its own MRT guards.
+    float4 vNormalDepth = float4(0, 0, 0, 0);
+    const int iOutEncoding = SC2_AXIS(b_iOutEncoding);
+
+    [branch] if (iOutEncoding == DEPTH_NORMAL_ENCODING_FLOAT)
+    {
     #if (b_emitMRTNormal == 1)
-    vNormalDepth.rgb = vNormal;
+        vNormalDepth.rgb = vNormal;
     #else
-    vNormalDepth.rgb = float3(0, 0, 0);
+        vNormalDepth.rgb = float3(0, 0, 0);
     #endif
     #if (b_emitMRTDepth == 1)
-    vNormalDepth.a = fDepth;
+        vNormalDepth.a = fDepth;
     #else
-    vNormalDepth.a = 1.0f;
+        vNormalDepth.a = 1.0f;
     #endif
-#elif (b_iOutEncoding == DEPTH_NORMAL_ENCODING_RGBA)
+    }
+    else [branch] if (iOutEncoding == DEPTH_NORMAL_ENCODING_RGBA)
+    {
     #if (b_emitMRTNormal == 1)
-    vNormal = mul((float3x3)psGlobals.mViewTransform, vNormal);
-    vNormalDepth.rg = (vNormal.xz * 0.5f) + 0.5f;
+        float3 vNormalVS = mul((float3x3)psGlobals.mViewTransform, vNormal);
+        vNormalDepth.rg = (vNormalVS.xz * 0.5f) + 0.5f;
     #else
-    vNormalDepth.rg = float2(0, 0);
+        vNormalDepth.rg = float2(0, 0);
     #endif
     #if (b_emitMRTDepth == 1)
-    fDepth = saturate(1.0f - 1.0f / (1.0f + fDepth / psGlobals.fMaxDepthFactor));
-    vNormalDepth.ba = frac(float2(1.0f, 255.0f) * fDepth);
-    vNormalDepth.b -= vNormalDepth.a / 255.0f;
+        float fEnc = saturate(1.0f - 1.0f / (1.0f + fDepth / psGlobals.fMaxDepthFactor));
+        vNormalDepth.ba = frac(float2(1.0f, 255.0f) * fEnc);
+        vNormalDepth.b -= vNormalDepth.a / 255.0f;
     #else
-    vNormalDepth.ba = float2(0, 0);
+        vNormalDepth.ba = float2(0, 0);
     #endif
-#elif (b_iOutEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
+    }
+    else [branch] if (iOutEncoding == DEPTH_NORMAL_ENCODING_RGBA16)
+    {
     #if (b_emitMRTNormal == 1)
-    vNormalDepth.rgb = vNormal * 0.5f + 0.5f;
+        vNormalDepth.rgb = vNormal * 0.5f + 0.5f;
     #else
-    vNormalDepth.rgb = float3(0, 0, 0);
+        vNormalDepth.rgb = float3(0, 0, 0);
     #endif
     #if (b_emitMRTDepth == 1)
-    vNormalDepth.a = saturate(1.0f - 1.0f / (1.0f + fDepth / psGlobals.fMaxDepthFactor));
+        vNormalDepth.a = saturate(1.0f - 1.0f / (1.0f + fDepth / psGlobals.fMaxDepthFactor));
     #else
-    vNormalDepth.a = 1.0f;
+        vNormalDepth.a = 1.0f;
     #endif
-#else
-    vNormalDepth = float4(0, 0, 0, 0);
-#endif
+    }
     return vNormalDepth;
 }

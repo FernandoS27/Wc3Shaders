@@ -144,8 +144,18 @@ def _parse_icb(text):
     return rows
 
 
+_PRECISE_RE = re.compile(r"^\[precise(?:\([xyzw]+\))?\]\s*")
+
+def _strip_precise(t):
+    """Drop fxc's ``[precise(xyz)]`` or ``[precise]`` dest annotation -- it
+    constrains the COMPILER's reassociation, not the arithmetic, so it is
+    inert here."""
+    return _PRECISE_RE.sub("", t.strip())
+
+
 def _parse_operand(t):
     """Parse a source operand -> tagged tuple (literal or register reference)."""
+    t = _strip_precise(t)
     neg = absf = False
     if t.startswith('-'):
         neg = True; t = t[1:]
@@ -158,12 +168,40 @@ def _parse_operand(t):
     swz = [_SW[c] for c in sw] if sw else [0, 1, 2, 3]
     return ('reg', base, int(num) if num else 0, _parse_index(idx), swz, neg, absf)
 
+#: pixel-shader system-value destinations, which fxc prints in camel case
+#: (``oMask``, ``oDepthLE``) and which carry no register number.
+_SV_DESTS = {'omask': 'omask', 'odepth': 'odepth',
+             'odepthle': 'odepth', 'odepthge': 'odepth'}
+
 def _parse_dest(t):
     """Parse a destination operand -> (base, num, index, written-component-list)."""
+    t = _strip_precise(t)
+    sv = _SV_DESTS.get(t.split('.')[0].lower())
+    if sv:
+        return (sv, 0, None, [0, 1, 2, 3])
     m = re.match(r"^([a-z_]+)(\d*)(\[[^\]]+\])?(?:\.([xyzw]+))?$", t)
     base, num, idx, sw = m.group(1), m.group(2), m.group(3), m.group(4)
     comps = [_SW[c] for c in sw] if sw else [0, 1, 2, 3]
     return (base, int(num) if num else 0, _parse_index(idx), comps)
+
+def _split_opcode(s):
+    """Split ``"opcode operands"`` at the first TOP-LEVEL space.
+
+    Resource-typed opcodes carry parenthesised annotations that themselves
+    contain spaces and commas -- e.g.
+    ``ld_structured_indexable(structured_buffer, stride=192)(mixed,...) r6.xyz, ...``
+    -- so a plain ``split(None, 1)`` would cut the opcode in half.
+    """
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch.isspace() and depth == 0:
+            return s[:i], s[i:].strip()
+    return s, ""
+
 
 def _split_operands(s):
     """Split an operand list on top-level commas (ignoring those inside ()/[])."""
@@ -240,7 +278,7 @@ class Program:
                 if section and s.startswith("//"):
                     m = _SIG_RE.match(line)
                     if m:
-                        entry = (m.group(1), int(m.group(2)), m.group(3), int(m.group(4)))
+                        entry = (m.group(1).upper(), int(m.group(2)), m.group(3), int(m.group(4)))
                         (self.input_sig if section == 'in' else self.output_sig).append(entry)
                     continue
                 if _MODEL_RE.match(s):
@@ -281,8 +319,8 @@ class Program:
             if s == "ret":
                 self.insns.append(("ret", ""))
                 continue
-            sp = s.split(None, 1)
-            self.insns.append((sp[0], sp[1] if len(sp) > 1 else ""))
+            op, rest = _split_opcode(s)
+            self.insns.append((op, rest))
 
 
 def _build_ast(insns, i, terms):
@@ -386,6 +424,23 @@ class TextureModel:
         return 2.5 + 2.0 * math.sin(v)   # smooth, ~[0.5, 4.5]
 
 
+class StructuredModel:
+    """``t#`` structured/raw buffer stand-in for ``ld_structured`` / ``ld_raw``.
+
+    Same contract as :class:`TextureModel`: a pure function of
+    (slot, element index, byte offset) so two shaders reading the same element
+    see identical bits. Values land in a modest float range because these
+    buffers hold material/instance parameters that get multiplied into colours.
+    """
+
+    def load(self, slot, index, byte_offset):
+        out = []
+        for c in range(4):
+            v = math.sin(slot * 1.7 + index * 0.37 + (byte_offset + 4 * c) * 0.013)
+            out.append(f2b(0.5 + 0.4 * v))
+        return out
+
+
 # --------------------------------------------------------------------------
 # execution
 # --------------------------------------------------------------------------
@@ -404,9 +459,13 @@ class _Ret(Exception):
 class Outputs:
     """Result of ``execute``: output registers plus the discard flag."""
 
-    def __init__(self, regs, discarded):
+    def __init__(self, regs, discarded, coverage=None, depth=None):
         self.regs = regs            # {register_number: [4 uint32 lanes]}
         self.discarded = discarded
+        #: SV_Coverage (``oMask``) as a uint32, or None if the shader never wrote it.
+        self.coverage = coverage
+        #: SV_Depth (``oDepth``/``oDepthLE``/``oDepthGE``) as a float, else None.
+        self.depth = depth
 
     def bits(self, reg, lane):
         return self.regs.get(reg, [0, 0, 0, 0])[lane]
@@ -426,6 +485,11 @@ class _VM:
         self.v = inputs
         self.x = {}
         self.o = defaultdict(lambda: [0, 0, 0, 0])
+        # SV_Coverage / SV_Depth are separate write targets, not o# registers.
+        self.omask = [0, 0, 0, 0]
+        self.odepth = [0, 0, 0, 0]
+        self.wrote_omask = False
+        self.wrote_odepth = False
         self.tex = texture
         self.deriv_scale = deriv_scale
         self.discarded = False
@@ -452,7 +516,24 @@ class _VM:
                 self.x[num] = [[0, 0, 0, 0] for _ in range(64)]
             return self.x[num][self._idx(spec)]
         if base == 'cb':
-            return self.cb[num][self._idx(spec)]
+            # A bare list subscript raises on overflow but silently WRAPS a negative
+            # index to the end of the bank, returning a real, plausible row -- so a
+            # shader indexing a constant buffer with garbage could corrupt a
+            # comparison instead of failing it.  Raise on both sides.
+            #
+            # Deliberately NOT returning 0 the way D3D does for an out-of-bounds
+            # constant read: `cb_rows` is a padded heuristic (declared + 4, floor 260
+            # for bank 0) whose own docstring notes that reflection under-reports
+            # dynamically-indexed arrays, so zero-filling would also swallow genuine
+            # under-allocation.  A real out-of-range index here has always meant a
+            # broken shader or an unconstrained draw -- it is how the
+            # b_iRibbonSizeInterpolation miscompile was found -- and both deserve to
+            # be loud.
+            i = self._idx(spec)
+            bank = self.cb[num]
+            if not (0 <= i < len(bank)):
+                raise IndexError("cb%d index %d outside [0,%d)" % (num, i, len(bank)))
+            return bank[i]
         if base == 'icb':
             # Read-only literal table from dcl_immediateConstantBuffer.  An index
             # past the end is a real shader bug (or an out-of-domain constant
@@ -461,6 +542,12 @@ class _VM:
             if not (0 <= i < len(self.icb)):
                 raise IndexError("icb index %d outside [0,%d)" % (i, len(self.icb)))
             return self.icb[i]
+        if base == 'omask':
+            self.wrote_omask = True
+            return self.omask
+        if base == 'odepth':
+            self.wrote_odepth = True
+            return self.odepth
         if base == 'null':
             return None
         raise NotImplementedError("operand base " + base)
@@ -471,6 +558,27 @@ class _VM:
         _, base, num, spec, swz, _, _ = opd
         arr = self._base(base, num, spec)
         return [arr[swz[k] if k < len(swz) else swz[-1]] for k in range(4)]
+
+    def bitread(self, opd):
+        """Raw bits, with any FLOAT source modifier applied.
+
+        `mov` and `movc` are type-agnostic, so reading them through `_raw` looks
+        right -- and silently drops `-` and `| |`.  fxc folds a constant
+        `1 - cColor` into `mov r2.xyz, -r2.xyzx` followed by `add ..., l(1,1,1,1)`,
+        and a plain bit copy turns that into `1 + cColor`.  The same shader with the
+        value read from a buffer instead is emitted as `add ..., -r4.xyzw,
+        l(1,1,1,1)` -- negate on `add`, which fread already honours -- so the two
+        forms disagreed and the DYNAMIC one was the correct leg.
+
+        Modifiers are only ever printed on a float operand, so applying them means
+        taking the float path for exactly those operands and staying a bit copy
+        otherwise, which is what preserves integer payloads that are not valid
+        floats (and NaN bit patterns that a float round-trip would canonicalise).
+        """
+        neg, absf = (opd[2], opd[3]) if opd[0] == 'lit' else (opd[5], opd[6])
+        if not (neg or absf):
+            return self._raw(opd)
+        return [f2b(x) for x in self.fread(opd)]
 
     def fread(self, opd):
         vals = [b2f(x) for x in self._raw(opd)]
@@ -515,8 +623,8 @@ def _cond_lane(opd):
     return 0 if opd[0] == 'lit' else opd[4][0]
 
 
-def execute(program, inputs=None, cbufs=None, *, texture=None, deriv_scale=1.0,
-            max_loop=1 << 16):
+def execute(program, inputs=None, cbufs=None, *, texture=None, structured=None,
+            deriv_scale=1.0, max_loop=1 << 16):
     """Run ``program`` once.
 
     Args:
@@ -524,6 +632,8 @@ def execute(program, inputs=None, cbufs=None, *, texture=None, deriv_scale=1.0,
         inputs:   ``{register: [4 uint32 lanes]}`` for ``v#`` input registers.
         cbufs:    ``{slot: [[4 uint32 lanes], ...]}`` for ``cb#`` constant buffers.
         texture:  a :class:`TextureModel` (defaults to the smooth stand-in).
+        structured: a :class:`StructuredModel` for ``ld_structured`` / ``ld_raw``
+                  reads (defaults to the deterministic stand-in).
         deriv_scale: multiplier on the synthetic screen-space derivative.
         max_loop: per-loop iteration cap. Exceeding it raises ``RuntimeError``
                   rather than hanging — almost always means a constant buffer
@@ -534,6 +644,7 @@ def execute(program, inputs=None, cbufs=None, *, texture=None, deriv_scale=1.0,
         :class:`Outputs`.
     """
     vm = _VM(program, cbufs or {}, inputs or {}, texture or TextureModel(), deriv_scale)
+    vm.sbuf = structured or StructuredModel()
 
     def run(nodes):
         for n in nodes:
@@ -593,7 +704,9 @@ def execute(program, inputs=None, cbufs=None, *, texture=None, deriv_scale=1.0,
         run(program.ast)
     except _Ret:
         pass                    # early return: keep whatever outputs were written
-    return Outputs(dict(vm.o), vm.discarded)
+    return Outputs(dict(vm.o), vm.discarded,
+                   coverage=vm.omask[0] if vm.wrote_omask else None,
+                   depth=b2f(vm.odepth[0]) if vm.wrote_odepth else None)
 
 
 def _texslot(tok):
@@ -649,6 +762,29 @@ def _do_op(vm, node):
         return
 
     # ---- texture ops ----
+    if base.startswith('ld_structured') or base.startswith('ld_raw'):
+        # ld_structured dest, srcElementIndex, srcByteOffset, srcResource
+        # ld_raw        dest, srcByteOffset, srcResource
+        if base.startswith('ld_structured'):
+            idx = vm.iread(srcs[0])[0]; off = vm.iread(srcs[1])[0]; res = srcs[2]
+        else:
+            idx = 0; off = vm.iread(srcs[0])[0]; res = srcs[1]
+        raw = vm.sbuf.load(res[2], idx, off)
+        vm.write_bits(dest, _apply_swz(raw, res[4]), False); return
+    if base.startswith('ldms'):           # multisample load: sample index ignored
+        coord = vm.fread(srcs[0]); res = srcs[1]
+        vm.write_f(dest, _apply_swz(vm.tex.sample(res[2], coord), res[4]), False); return
+    if base.startswith('ld'):             # typed texel fetch: ld dest, coord, t#
+        # Integer texel coords (xyz = u,v,mip). Feed them through the same
+        # smooth field as `sample` so a shader that fetches and one that samples
+        # the same slot stay comparable.
+        coord = [float(x) for x in vm.iread(srcs[0])]; res = srcs[1]
+        vm.write_f(dest, _apply_swz(vm.tex.sample(res[2], coord), res[4]), False); return
+    if base.startswith('eval_'):
+        # eval_sample_index / eval_centroid / eval_snapped: per-sample attribute
+        # evaluation. One invocation has a single sample, so the attribute value
+        # IS the interpolated value -- pass v# through unchanged.
+        vm.write_bits(dest, vm._raw(srcs[0]), False); return
     if base.startswith('sample_c'):       # sample_c / sample_c_lz (PCF compare)
         coord = vm.fread(srcs[0]); slot = srcs[1][2]; ref = vm.fread(srcs[3])[0]
         val = vm.tex.sample_compare(slot, coord, ref)
@@ -668,9 +804,9 @@ def _do_op(vm, node):
 
     # ---- float ALU ----
     if base == 'mov':
-        vm.write_bits(dest, vm._raw(srcs[0]), sat); return
+        vm.write_bits(dest, vm.bitread(srcs[0]), sat); return
     if base == 'movc':
-        c = vm.uread(srcs[0]); a = vm._raw(srcs[1]); b = vm._raw(srcs[2])
+        c = vm.uread(srcs[0]); a = vm.bitread(srcs[1]); b = vm.bitread(srcs[2])
         vm.write_bits(dest, [a[k] if c[k] != 0 else b[k] for k in range(4)], sat); return
     if base == 'dp2':
         a = vm.fread(srcs[0]); b = vm.fread(srcs[1])
@@ -682,7 +818,8 @@ def _do_op(vm, node):
         a = vm.fread(srcs[0]); b = vm.fread(srcs[1])
         vm.write_f(dest, [sum(a[k] * b[k] for k in range(4))] * 4, sat); return
     if base in ('add', 'mul', 'mad', 'div', 'min', 'max',
-                'sqrt', 'rsq', 'exp', 'log', 'frc', 'round_ni', 'round_z', 'rcp'):
+                'sqrt', 'rsq', 'exp', 'log', 'frc', 'round_ni', 'round_z',
+                'round_ne', 'round_pi', 'rcp'):
         a = vm.fread(srcs[0])
         if base == 'add':
             b = vm.fread(srcs[1]); r = [a[k] + b[k] for k in range(4)]
@@ -720,6 +857,11 @@ def _do_op(vm, node):
             r = [math.floor(x) if math.isfinite(x) else x for x in a]
         elif base == 'round_z':
             r = [math.trunc(x) if math.isfinite(x) else x for x in a]
+        elif base == 'round_ne':
+            # round-half-to-EVEN, which is exactly Python's round() for floats
+            r = [float(round(x)) if math.isfinite(x) else x for x in a]
+        elif base == 'round_pi':
+            r = [math.ceil(x) if math.isfinite(x) else x for x in a]
         vm.write_f(dest, r, sat); return
     if base in ('lt', 'ge', 'eq', 'ne'):
         a = vm.fread(srcs[0]); b = vm.fread(srcs[1])
@@ -879,6 +1021,25 @@ def _selftest():
     # abs / neg source modifiers
     o = run("mov r0.x, l(-3.0)\nadd r1.x, |r0.x|, l(1.0)\nadd r1.y, -r0.x, l(0.0)\nmov o0.xy, r1.xy")
     check("abs/neg modifiers", [round(o.f(0, k), 3) for k in range(2)], [4.0, 3.0])
+    # ...and mov/movc must honour them too.  They are bit copies, so the modifier
+    # is easy to drop, and fxc emits `mov rN.xyz, -rN.xyzx` for every constant-folded
+    # `1 - c` -- see bitread().
+    o = run("mov r0.xyzw, l(1.0,2.0,3.0,4.0)\nmov r1.xyz, -r0.xyzx\nmov o0.xyzw, r1.xyzw")
+    check("mov honours neg", [round(o.f(0, k), 3) for k in range(4)], [-1.0, -2.0, -3.0, 0.0])
+    o = run("mov r0.xyzw, l(-1.0,2.0,-3.0,4.0)\nmov r1.xyz, |r0.xyzx|\nmov o0.xyzw, r1.xyzw")
+    check("mov honours abs", [round(o.f(0, k), 3) for k in range(4)], [1.0, 2.0, 3.0, 0.0])
+    o = run("mov r0.xyzw, l(1.0,2.0,3.0,4.0)\nmov r2.xyzw, l(1,1,0,0)\n"
+            "movc r1.xyzw, r2.xyzw, -r0.xyzw, r0.xyzw\nmov o0.xyzw, r1.xyzw")
+    check("movc honours neg", [round(o.f(0, k), 3) for k in range(4)], [-1.0, -2.0, 3.0, 4.0])
+    # in-place negate, the exact shape of a constant-folded invert: r0 = 1 - r0
+    o = run("mov r0.xyzw, l(1.0,2.0,3.0,4.0)\nmov r0.xyz, -r0.xyzx\n"
+            "add r0.xyzw, r0.xyzw, l(1.0,1.0,1.0,1.0)\nmov o0.xyzw, r0.xyzw")
+    check("in-place neg then add", [round(o.f(0, k), 3) for k in range(4)], [0.0, -1.0, -2.0, 5.0])
+    # masked write with a NON-uniform source swizzle: dest .zw take the swizzle's
+    # 3rd and 4th entries, not its 1st and 2nd.  The .yz case above cannot tell the
+    # difference, because its source swizzle is uniform.
+    o = run("mov r0.xyzw, l(10,20,30,40)\nmov r1.zw, r0.xxxy\nmov o0.xyzw, r1.xyzw")
+    check("masked write, skewed swizzle", [o.i(0, k) for k in range(4)], [0, 0, 10, 20])
     # imul: low / high halves, signed
     o = run("mov r0.xyzw, l(7,3,65536,0)\nimul null, r1.x, r0.x, r0.y\n"
             "imul r2.x, r2.y, r0.z, r0.z\nmov o0.x, r1.x\nmov o0.y, r2.y\nmov o0.z, r2.x")

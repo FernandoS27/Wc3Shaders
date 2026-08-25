@@ -131,23 +131,36 @@ def gen_preamble(stage, live, b_values, entry_text, entry, uv_mappings=None,
     gbsc = _gbs_count(b_values) if has_gbs else 0
     L = []
 
+    # Canonical interpolant slots (design section 4).  The REFERENCE leg has to move
+    # with the candidate: the comparator aligns a varying by (semantic, index), so if
+    # only one leg renumbered, the two would draw different random values for the
+    # same interpolant and every affected permutation would diverge for a reason that
+    # has nothing to do with shading.  The struct field ORDER is unchanged, so fxc
+    # still assigns the same registers and emits the same code -- only the linkage
+    # names differ.
+    import sc2_shaders_cfg as _cfg
+    _canon = _cfg.use_canon_slots()
+
     def field_lines(with_sem):
         out = []
         tc = 0
         out.append("  float4 HPos : SV_Position;" if with_sem else "  float4 HPos;")
         for n in scal:
             t = HLSL_T[INTERP_DIM[n]]
-            out.append("  %s %s%s;" % (t, n, " : TEXCOORD%d" % tc if with_sem else ""))
+            slot = _cfg.SC2_CANON_SLOT[n] if _canon else tc
+            out.append("  %s %s%s;" % (t, n, " : TEXCOORD%d" % slot if with_sem else ""))
             tc += 1
         if has_uv:
+            uvb = _cfg.SC2_CANON_UV_BASE if _canon else tc
             out.append("  float4 sc2UV[%d]%s;" %
-                       (uvc, " : TEXCOORD%d" % tc if with_sem else ""))
+                       (uvc, " : TEXCOORD%d" % uvb if with_sem else ""))
             tc += uvc
         # The second array interpolant, after UV — postprocessquad.fx's per-tap blur
         # offsets.  Keep this ordering in lockstep with sc2_shaders_cfg.interp_defines.
         if has_gbs:
+            gbsb = _cfg.SC2_CANON_GBS_BASE if _canon else tc
             out.append("  float4 sc2GaussianBlurSample[%d]%s;" %
-                       (gbsc, " : TEXCOORD%d" % tc if with_sem else ""))
+                       (gbsc, " : TEXCOORD%d" % gbsb if with_sem else ""))
             tc += gbsc
         return out, tc
 

@@ -18,6 +18,11 @@
 
 implementing sc2_shaders;
 
+// SC2_LAYER_<Prop>: a material-layer property reads from the permutation
+// constant buffer once its switch is on, and from the `#define` until then.
+#include "ps/model_layers_axes.slangh"
+#include "types/perm_cb.slangh"
+
 // ---- enums (psmaterialdefines.fx) ------------------------------------------
 #define COLORSRC_CONSTANT   2
 #define LAYEROP_MOD                     0
@@ -319,15 +324,13 @@ float4 computeLayerColorInternal(ModelPSInput vertOut, SLayerConfig cfg,
     if (cfg.b_iFresnelMode != FRESNELMODE_NONE)
     {
         float fFresnelTerm;
-#if b_useSimplifiedFresnel
-        fFresnelTerm = calcFresnelTerm(vNormal, psGlobals.vCameraDirection,
+        // Both arms differ only in the view vector, and EyeToVertexFresnel() is a
+        // total accessor, so this is an ordinary value selection.
+        float3 vFresnelView = SC2_AXIS(b_useSimplifiedFresnel)
+                            ? psGlobals.vCameraDirection : vertOut.EyeToVertexFresnel();
+        fFresnelTerm = calcFresnelTerm(vNormal, vFresnelView,
             cfg.p_vFresnelExponentBiasScale.x, cfg.p_mFresnelTransform,
             cfg.b_iFresnelTransformMode, cfg.b_iFresnelSaturate);
-#else
-        fFresnelTerm = calcFresnelTerm(vNormal, vertOut.EyeToVertexFresnel(),
-            cfg.p_vFresnelExponentBiasScale.x, cfg.p_mFresnelTransform,
-            cfg.b_iFresnelTransformMode, cfg.b_iFresnelSaturate);
-#endif
         if (cfg.b_iFresnelMode == FRESNELMODE_INVERTED)
             fFresnelTerm = 1.0f - fFresnelTerm;
         fFresnelTerm = saturate(fFresnelTerm * cfg.p_vFresnelExponentBiasScale.z
@@ -501,24 +504,24 @@ float4 getLayerColor2D(ModelPSInput vertOut, SLayerConfig cfg,
 SLayerConfig setupDiffuseLayer()
 {
     SLayerConfig c;
-    c.b_iLayerEnable            = b_iDiffuseLayerEnable;
-    c.b_iLayerId                = b_iDiffuseLayerId;
+    c.b_iLayerEnable            = SC2_CORE_ENABLE(Diffuse, b_iDiffuseLayerEnable);
+    c.b_iLayerId                = SC2_LAYER_LayerId(b_iDiffuseLayerId);
     c.b_iTextureType            = b_iDiffuseTextureType;
-    c.b_iTriPlanarUvId          = b_iDiffuseTriPlanarUvId;
+    c.b_iTriPlanarUvId          = SC2_LAYER_TriPlanarUvId(b_iDiffuseTriPlanarUvId);
     c.p_vAtlasParams            = psGlobals.vDiffuseAtlasParams;
-    c.b_iUseConstantColor       = b_iDiffuseUseConstantColor;
-    c.b_iUseMask                = b_iDiffuseUseMask;
-    c.b_iChannelSelect          = b_iDiffuseChannelSelect;
-    c.b_iTeamColorMode          = b_iDiffuseTeamColorMode;
-    c.b_iInvert                 = b_iDiffuseInvert;
-    c.b_iClamp                  = b_iDiffuseClamp;
-    c.b_iFresnelMode            = b_iDiffuseFresnelMode;
-    c.b_iFresnelTransformMode   = b_iDiffuseFresnelTransformMode;
-    c.b_iFresnelSaturate        = b_iDiffuseFresnelSaturate;
-    c.b_iOp                     = b_iDiffuseOp;
-    c.b_iUVEmitter              = b_iDiffuseUVEmitter;
-    c.b_iUVMapping              = b_iDiffuseUVMapping;
-    c.b_iIsRTTTexture           = b_iDiffuseIsRTTTexture;
+    c.b_iUseConstantColor       = SC2_CORE_ENABLE(Diffuse, b_iDiffuseUseConstantColor);
+    c.b_iUseMask                = SC2_LAYER_UseMask(b_iDiffuseUseMask);
+    c.b_iChannelSelect          = SC2_LAYER_ChannelSelect(b_iDiffuseChannelSelect);
+    c.b_iTeamColorMode          = SC2_LAYER_TeamColorMode(b_iDiffuseTeamColorMode);
+    c.b_iInvert                 = SC2_LAYER_Invert(b_iDiffuseInvert);
+    c.b_iClamp                  = SC2_LAYER_Clamp(b_iDiffuseClamp);
+    c.b_iFresnelMode            = SC2_LAYER_FresnelMode(b_iDiffuseFresnelMode);
+    c.b_iFresnelTransformMode   = SC2_LAYER_FresnelTransformMode(b_iDiffuseFresnelTransformMode);
+    c.b_iFresnelSaturate        = SC2_LAYER_FresnelSaturate(b_iDiffuseFresnelSaturate);
+    c.b_iOp                     = SC2_LAYER_Op(b_iDiffuseOp);
+    c.b_iUVEmitter              = SC2_LAYER_UVEmitter(b_iDiffuseUVEmitter);
+    c.b_iUVMapping              = SC2_LAYER_UVMapping(b_iDiffuseUVMapping);
+    c.b_iIsRTTTexture           = SC2_LAYER_IsRTTTexture(b_iDiffuseIsRTTTexture);
     c.p_vMultiplyAddAlphaTrans  = psGlobals.vDiffuseMultiplyAddAlphaTrans;
     c.p_vFresnelExponentBiasScale = psGlobals.vDiffuseFresnelExponentBiasScale;
     c.p_cConstantColor          = psGlobals.cDiffuseConstantColor;
@@ -532,24 +535,24 @@ SLayerConfig setupDiffuseLayer()
 SLayerConfig setupSpecularLayer()
 {
     SLayerConfig c;
-    c.b_iLayerEnable            = b_iSpecularLayerEnable;
-    c.b_iLayerId                = b_iSpecularLayerId;
+    c.b_iLayerEnable            = SC2_CORE_ENABLE(Specular, b_iSpecularLayerEnable);
+    c.b_iLayerId                = SC2_LAYER_LayerId(b_iSpecularLayerId);
     c.b_iTextureType            = b_iSpecularTextureType;
-    c.b_iTriPlanarUvId          = b_iSpecularTriPlanarUvId;
+    c.b_iTriPlanarUvId          = SC2_LAYER_TriPlanarUvId(b_iSpecularTriPlanarUvId);
     c.p_vAtlasParams            = psGlobals.vSpecularAtlasParams;
-    c.b_iUseConstantColor       = b_iSpecularUseConstantColor;
-    c.b_iUseMask                = b_iSpecularUseMask;
-    c.b_iChannelSelect          = b_iSpecularChannelSelect;
-    c.b_iTeamColorMode          = b_iSpecularTeamColorMode;
-    c.b_iInvert                 = b_iSpecularInvert;
-    c.b_iClamp                  = b_iSpecularClamp;
-    c.b_iFresnelMode            = b_iSpecularFresnelMode;
-    c.b_iFresnelTransformMode   = b_iSpecularFresnelTransformMode;
-    c.b_iFresnelSaturate        = b_iSpecularFresnelSaturate;
-    c.b_iOp                     = b_iSpecularOp;
-    c.b_iUVEmitter              = b_iSpecularUVEmitter;
-    c.b_iUVMapping              = b_iSpecularUVMapping;
-    c.b_iIsRTTTexture           = b_iSpecularIsRTTTexture;
+    c.b_iUseConstantColor       = SC2_CORE_ENABLE(Specular, b_iSpecularUseConstantColor);
+    c.b_iUseMask                = SC2_LAYER_UseMask(b_iSpecularUseMask);
+    c.b_iChannelSelect          = SC2_LAYER_ChannelSelect(b_iSpecularChannelSelect);
+    c.b_iTeamColorMode          = SC2_LAYER_TeamColorMode(b_iSpecularTeamColorMode);
+    c.b_iInvert                 = SC2_LAYER_Invert(b_iSpecularInvert);
+    c.b_iClamp                  = SC2_LAYER_Clamp(b_iSpecularClamp);
+    c.b_iFresnelMode            = SC2_LAYER_FresnelMode(b_iSpecularFresnelMode);
+    c.b_iFresnelTransformMode   = SC2_LAYER_FresnelTransformMode(b_iSpecularFresnelTransformMode);
+    c.b_iFresnelSaturate        = SC2_LAYER_FresnelSaturate(b_iSpecularFresnelSaturate);
+    c.b_iOp                     = SC2_LAYER_Op(b_iSpecularOp);
+    c.b_iUVEmitter              = SC2_LAYER_UVEmitter(b_iSpecularUVEmitter);
+    c.b_iUVMapping              = SC2_LAYER_UVMapping(b_iSpecularUVMapping);
+    c.b_iIsRTTTexture           = SC2_LAYER_IsRTTTexture(b_iSpecularIsRTTTexture);
     c.p_vMultiplyAddAlphaTrans  = psGlobals.vSpecularMultiplyAddAlphaTrans;
     c.p_vFresnelExponentBiasScale = psGlobals.vSpecularFresnelExponentBiasScale;
     c.p_cConstantColor          = psGlobals.cSpecularConstantColor;

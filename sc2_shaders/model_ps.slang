@@ -10,6 +10,7 @@
 // MainShading accumulated.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #ifndef b_emitFinalColor
 #define b_emitFinalColor 0
@@ -72,9 +73,8 @@ public ModelPSOutput computeModelPixel(ModelPSInput vertOut)
     result.cSpecular = float4(def.cSpecular, result.cColor.a);
     #if (b_emitMRTSpecularPower == 1)
     result.cSpecular.a = def.cSpecularPower;
-        #if b_iUse8BitHDR
-    result.cSpecular.a *= psGlobals.vHDRScaling.y;
-        #endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDR))
+        result.cSpecular.a *= psGlobals.vHDRScaling.y;
     #endif
 #endif
 

@@ -128,6 +128,12 @@ class _RandomRows:
     def __init__(self, seed, slot):
         self.seed, self.slot = seed, slot
 
+    def __len__(self):
+        # D3D11 SM5 constant buffer maximum is 4096 float4 rows (256 typical).
+        # Returning a large constant satisfies dxbc_interp's bounds check so
+        # dynamically-indexed cbuffers do not raise instead of comparing.
+        return 4096
+
     def __getitem__(self, index):
         rng = random.Random(f"{self.seed}:{self.slot}:{index}")
         return [f2b(rng.uniform(-1, 1)) for _ in range(4)]

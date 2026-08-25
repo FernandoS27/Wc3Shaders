@@ -10,6 +10,7 @@
 // branches are omitted.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 // common.fx terrain height range (assumes 16-bit height precision).
 #define c_terrainMinHeight (-100.0f)
@@ -96,9 +97,8 @@ float4 shadeTerrainBase(ModelPSInput vertOut, inout DeferredOutputs def)
     cResult.xyz = light.cLightDiffuse * cDiffuse.rgb + light.cLightSpecular * cDiffuse.a;
     cResult.w = 1.0f;
 
-#if b_useVertexColors
-    cResult.rgb *= saturate(vertOut.VertexColor().xyz);
-#endif
+    [branch] if (SC2_AXIS(b_useVertexColors))
+        cResult.rgb *= saturate(vertOut.VertexColor().xyz);
 
 #if b_iTerrainAlphaMaskLayerEnable
     {
@@ -132,18 +132,20 @@ float4 shadeTerrain(ModelPSInput vertOut, inout DeferredOutputs def)
     def.cSpecular = float3(1, 1, 1);
     def.cSpecularPower = 1.0f;
 
-#if b_iSolidColor
-    def.vNormal = normalize(vertOut.Normal().xyz);
-    return float4(1, 0, 0, 1);
-#elif b_computeHeight
-    float h = (vertOut.TerrainUV().x - c_terrainMinHeight) * c_terrainHeightScale;
-    // Output format assumed A8R8G8B8.
-    float g = floor(h / 256.0f);
-    float b = floor(h - g * 256.0f);
-    return float4(0.0f, g / 255.0f, b / 255.0f, 1.0f);
-#elif b_creepEnabled
-    return shadeTerrainCreep(vertOut, def);
-#else
+    [branch] if (SC2_AXIS(b_iSolidColor))
+    {
+        def.vNormal = normalize(vertOut.Normal().xyz);
+        return float4(1, 0, 0, 1);
+    }
+    [branch] if (SC2_AXIS(b_computeHeight))
+    {
+        float h = (vertOut.TerrainUV().x - c_terrainMinHeight) * c_terrainHeightScale;
+        // Output format assumed A8R8G8B8.
+        float g = floor(h / 256.0f);
+        float b = floor(h - g * 256.0f);
+        return float4(0.0f, g / 255.0f, b / 255.0f, 1.0f);
+    }
+    [branch] if (SC2_AXIS(b_creepEnabled))
+        return shadeTerrainCreep(vertOut, def);
     return shadeTerrainBase(vertOut, def);
-#endif
 }

@@ -9,6 +9,7 @@
 // dead (no reachable perm sets b_iDebugMode), so it is omitted.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #define CREEP_OUTPUT_DIFFUSE_ONLY 0
 #define CREEP_OUTPUT_NORMALS_ONLY 1
@@ -53,34 +54,35 @@ float3 decodeNormalRaw(float3 vNormal)
 // pscreep.fx : GetCreepTextureUV — three tri-planar UV sets, or the planar TerrainUV.zw.
 void getCreepTextureUV(ModelPSInput vertOut, float2 tiling, out float2 uvs[3])
 {
-#if b_iTriPlanarCreep
-    float3 vScaledPos = vertOut.WorldPos().xyz * psGlobals.vCreepTriPlanarScale;
-    float3 vNormal = vertOut.Normal().xyz;
-    float3 s = sign(vNormal);
-    uvs[0] = vScaledPos.xy * float2(s.z, -1.0f) * tiling;
-    uvs[1] = vScaledPos.xz * float2(-s.y, -1.0f) * tiling.x;
-    uvs[2] = vScaledPos.yz * float2(s.x, -1.0f) * tiling.yx;
-    // Non-BSL: rotate each UV by the 2x2 built from p_vCreepTextureRotation (x,y,z,w).
-    uvs[0] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[0]);
-    uvs[1] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[1]);
-    uvs[2] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[2]);
-#else
-    uvs[0] = vertOut.TerrainUV().zw * tiling;
-    uvs[1] = float2(0, 0);
-    uvs[2] = float2(0, 0);
-#endif
+    [branch] if (SC2_AXIS(b_iTriPlanarCreep))
+    {
+        float3 vScaledPos = vertOut.WorldPos().xyz * psGlobals.vCreepTriPlanarScale;
+        float3 vNormal = vertOut.Normal().xyz;
+        float3 s = sign(vNormal);
+        uvs[0] = vScaledPos.xy * float2(s.z, -1.0f) * tiling;
+        uvs[1] = vScaledPos.xz * float2(-s.y, -1.0f) * tiling.x;
+        uvs[2] = vScaledPos.yz * float2(s.x, -1.0f) * tiling.yx;
+        // Non-BSL: rotate each UV by the 2x2 built from p_vCreepTextureRotation.
+        uvs[0] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[0]);
+        uvs[1] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[1]);
+        uvs[2] = mul(float2x2(psGlobals.vCreepTextureRotation), uvs[2]);
+    }
+    else
+    {
+        uvs[0] = vertOut.TerrainUV().zw * tiling;
+        uvs[1] = float2(0, 0);
+        uvs[2] = float2(0, 0);
+    }
 }
 
 // pscreep.fx : SampleCreepTexture.
 float4 sampleCreepTexture(Texture2D<float4> tCreep, SamplerState sCreep, float2 uvs[3],
                           ModelPSInput vertOut)
 {
-#if b_iTriPlanarCreep
-    return sampleTriPlanarTexture(tCreep, sCreep, uvs[0], uvs[1], uvs[2],
-                                  vertOut.TriPlanarWeights().xyz);
-#else
+    [branch] if (SC2_AXIS(b_iTriPlanarCreep))
+        return sampleTriPlanarTexture(tCreep, sCreep, uvs[0], uvs[1], uvs[2],
+                                      vertOut.TriPlanarWeights().xyz);
     return tCreep.Sample(sCreep, uvs[0].xy);
-#endif
 }
 
 // pscreep.fx : SampleGroundTexture.
@@ -125,14 +127,12 @@ float4 pixelCreepGeneric(ModelPSInput vertOut, bool useSpecular, out float4 cLig
 
     // Height edge factor (tri-planar) / slope factor (planar).
     float heightFactor = 1.0f;
-#if b_iTriPlanarCreep
-    heightFactor = 1.0f - saturate((vertOut.WorldPos().z - psGlobals.vCreepHeightRamp.x)
-                                   * psGlobals.vCreepHeightRamp.y);
-#endif
     float slopeFactor = 1.0f;
-#if !b_iTriPlanarCreep
-    slopeFactor = vertOut.FOWUV().z;
-#endif
+    [branch] if (SC2_AXIS(b_iTriPlanarCreep))
+        heightFactor = 1.0f - saturate((vertOut.WorldPos().z - psGlobals.vCreepHeightRamp.x)
+                                       * psGlobals.vCreepHeightRamp.y);
+    else
+        slopeFactor = vertOut.FOWUV().z;
 
     float edgeFactor = saturate((creepGameCoverageSample.a - psGlobals.vEdgeNormalMapRampConstants.x)
                                 * psGlobals.vEdgeNormalMapRampConstants.y);
@@ -142,21 +142,19 @@ float4 pixelCreepGeneric(ModelPSInput vertOut, bool useSpecular, out float4 cLig
 #if b_useNormalMapping
     pixelNormalSample = sampleCreepTexture(p_sCreepInteriorNormalMap_t, p_sSamp, normalUV, vertOut).xyz;
     pixelNormalSample.xyz = decodeNormalRaw(pixelNormalSample.xyz);
-  #if b_iCreepUseGroundNormalMap
+    [branch] if (SC2_AXIS(b_iCreepUseGroundNormalMap))
     {
         float2 groundNormalSample = decodeNormalRaw(
             sampleGroundTexture(p_sCreepGroundNormalMap_t, p_sSamp, vertOut).xyy).xy;
         pixelNormalSample.xy = pixelNormalSample.xy + groundNormalSample * psGlobals.vfCreepGroundNormalBlend;
     }
-  #endif
     pixelNormalSample.xyz = normalize(lerp(edgeNormalMapAndAlphaMultiplierSample.xyz,
                                            pixelNormalSample.xyz, edgeFactor * heightFactor));
-  #if (b_iCreepOutputMode == CREEP_OUTPUT_NORMALS_ONLY)
-    worldNormal = (pixelNormalSample * 0.5f) + 0.5f;
-  #else
-    worldNormal = tangentToWorld(pixelNormalSample, vertOut.Normal().xyz,
-                                 vertOut.Tangent().xyz, vertOut.Binormal());
-  #endif
+    [branch] if (SC2_AXIS(b_iCreepOutputMode) == CREEP_OUTPUT_NORMALS_ONLY)
+        worldNormal = (pixelNormalSample * 0.5f) + 0.5f;
+    else
+        worldNormal = tangentToWorld(pixelNormalSample, vertOut.Normal().xyz,
+                                     vertOut.Tangent().xyz, vertOut.Binormal());
 #else
     pixelNormalSample.xyz = vertOut.Normal().xyz;
     worldNormal = vertOut.Normal().xyz;
@@ -169,34 +167,35 @@ float4 pixelCreepGeneric(ModelPSInput vertOut, bool useSpecular, out float4 cLig
     float3 diff = light.cLightDiffuse;
     float3 spec = light.cLightSpecular;
 
-#if (b_iCreepOutputMode == CREEP_OUTPUT_COMPLETE)
-    output.xyz = diff * diffuseColorSample.xyz;
-  #if b_useVertexColors
-    output.rgb *= saturate(vertOut.VertexColor().xyz);
-  #endif
-#elif (b_iCreepOutputMode == CREEP_OUTPUT_DIFFUSE_ONLY)
-    output.xyz = diffuseColorSample.xyz;
-#elif (b_iCreepOutputMode == CREEP_OUTPUT_NORMALS_ONLY)
-    output.xyz = (pixelNormalSample.xyz * 0.5f) + 0.5f;
-#else   // CREEP_OUTPUT_STENCIL_ONLY
-    output.xyz = float3(1, 1, 1);
-#endif
+    const int iCreepOutputMode = SC2_AXIS(b_iCreepOutputMode);
+    [branch] if (iCreepOutputMode == CREEP_OUTPUT_COMPLETE)
+    {
+        output.xyz = diff * diffuseColorSample.xyz;
+        [branch] if (SC2_AXIS(b_useVertexColors))
+            output.rgb *= saturate(vertOut.VertexColor().xyz);
+    }
+    else [branch] if (iCreepOutputMode == CREEP_OUTPUT_DIFFUSE_ONLY)
+        output.xyz = diffuseColorSample.xyz;
+    else [branch] if (iCreepOutputMode == CREEP_OUTPUT_NORMALS_ONLY)
+        output.xyz = (pixelNormalSample.xyz * 0.5f) + 0.5f;
+    else    // CREEP_OUTPUT_STENCIL_ONLY
+        output.xyz = float3(1, 1, 1);
 
     output.w = creepGameCoverageSample.a * edgeNormalMapAndAlphaMultiplierSample.a
              * heightFactor * slopeFactor;
 
     float3 specularMaskSample = float3(0, 0, 0);
-#if (b_iCreepOutputMode != CREEP_OUTPUT_NORMALS_ONLY)
+    [branch] if (iCreepOutputMode != CREEP_OUTPUT_NORMALS_ONLY)
     {
         float specularMask = saturate(edgeNormalMapAndAlphaMultiplierSample.a * 5.0f - 0.5f);
         specularMaskSample = sampleCreepTexture(p_sCreepSpecularMask_t, p_sSamp, baseUV, vertOut).xyz
                            * specularMask;
-    #if (b_iCreepOutputMode == CREEP_OUTPUT_COMPLETE)
-        if (useSpecular)
-            output.xyz += spec * specularMaskSample;
-    #endif
+        [branch] if (iCreepOutputMode == CREEP_OUTPUT_COMPLETE)
+        {
+            if (useSpecular)
+                output.xyz += spec * specularMaskSample;
+        }
     }
-#endif
 
     // Cheesy luminance for the deferred specular power.
     def.cSpecularPower = dot(specularMaskSample, float3(0.3f, 0.59f, 0.11f));
@@ -214,21 +213,23 @@ float4 pixelCreepOpaque(ModelPSInput vertOut, inout DeferredOutputs def)
     float4 cLightingRegionMap;
     float4 output = pixelCreepGeneric(vertOut, true, cLightingRegionMap, def);
 
-#if (b_iCreepOutputMode == CREEP_OUTPUT_DIFFUSE_ONLY)
-    output.a = step(psGlobals.fCreepOpaqueAlphaThreshold, output.a)
-             * (def.cSpecularPower + (1.0f / 255.0f));
-#elif (b_iCreepOutputMode == CREEP_OUTPUT_STENCIL_ONLY)
+    const int iCreepOutputMode = SC2_AXIS(b_iCreepOutputMode);
+    [branch] if (iCreepOutputMode == CREEP_OUTPUT_DIFFUSE_ONLY)
+        output.a = step(psGlobals.fCreepOpaqueAlphaThreshold, output.a)
+                 * (def.cSpecularPower + (1.0f / 255.0f));
+    else [branch] if (iCreepOutputMode == CREEP_OUTPUT_STENCIL_ONLY)
     { float s = step(psGlobals.fCreepOpaqueAlphaThreshold, output.a); output = float4(s, s, s, s); }
-#else   // NORMALS_ONLY or COMPLETE
-    output.a = step(psGlobals.fCreepOpaqueAlphaThreshold, output.a);
-#endif
+    else    // NORMALS_ONLY or COMPLETE
+        output.a = step(psGlobals.fCreepOpaqueAlphaThreshold, output.a);
 
-#if (b_iCreepOutputMode != CREEP_OUTPUT_STENCIL_ONLY) && (b_iCreepOutputMode != CREEP_OUTPUT_NORMALS_ONLY)
-    output = float4(applyFog(vertOut, output, 1.0f, cLightingRegionMap).xyz, output.a);
-  #if b_emitFinalColor
-    output = applyFogOfWar(ndc2Tex(vertOut.FOWUV().xy), output, def.cDiffuse);
-  #endif
-#endif
+    [branch] if (iCreepOutputMode != CREEP_OUTPUT_STENCIL_ONLY
+                 && iCreepOutputMode != CREEP_OUTPUT_NORMALS_ONLY)
+    {
+        output = float4(applyFog(vertOut, output, 1.0f, cLightingRegionMap).xyz, output.a);
+    #if b_emitFinalColor
+        output = applyFogOfWar(ndc2Tex(vertOut.FOWUV().xy), output, def.cDiffuse);
+    #endif
+    }
     output *= psGlobals.vTerrainTint;
     return output;
 }
@@ -242,12 +243,13 @@ float4 pixelCreepTranslucent(ModelPSInput vertOut, inout DeferredOutputs def)
     output.a = saturate((output.a - psGlobals.vCreepTransparentRampConstants.x)
                         * psGlobals.vCreepTransparentRampConstants.y);
 
-#if (b_iCreepOutputMode != CREEP_OUTPUT_NORMALS_ONLY)
-    output = float4(applyFog(vertOut, output, 1.0f, cLightingRegionMap).xyz, output.a);
-  #if b_emitFinalColor
-    output = applyFogOfWar(ndc2Tex(vertOut.FOWUV().xy), output, def.cDiffuse);
-  #endif
-#endif
+    [branch] if (SC2_AXIS(b_iCreepOutputMode) != CREEP_OUTPUT_NORMALS_ONLY)
+    {
+        output = float4(applyFog(vertOut, output, 1.0f, cLightingRegionMap).xyz, output.a);
+    #if b_emitFinalColor
+        output = applyFogOfWar(ndc2Tex(vertOut.FOWUV().xy), output, def.cDiffuse);
+    #endif
+    }
     output *= psGlobals.vTerrainTint;
     def.cDiffuse = def.cDiffuse * psGlobals.cTransparentTintColor;
     def.cSpecular = def.cSpecular * psGlobals.cTransparentTintColor;

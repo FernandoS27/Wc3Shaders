@@ -28,6 +28,7 @@
 // Retail set: 23 VS perms, 1031 PS perms.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 // ---- own axes ---------------------------------------------------------------
 #ifndef b_iMode
@@ -435,10 +436,11 @@ float ppqBlurWeight(int i)
 // clamp / interior / weighted / layered rejections.
 float ppqGaussSample(float2 vTapUV, float fWeight, inout float4 vResult, float4 vNormalDepth)
 {
-#if b_iConstrainToViewport
-    vTapUV = max(vTapUV, psGlobals.vPostProcessViewport.xy);
-    vTapUV = min(vTapUV, psGlobals.vPostProcessViewport.zw);
-#endif
+    [branch] if (SC2_AXIS(b_iConstrainToViewport))
+    {
+        vTapUV = max(vTapUV, psGlobals.vPostProcessViewport.xy);
+        vTapUV = min(vTapUV, psGlobals.vPostProcessViewport.zw);
+    }
 
     float4 cValue;
 #if b_iUseSeparateBlurMap
@@ -556,13 +558,13 @@ float4 ppqGaussianBlur(PostProcessQuadPSInput vertOut)
     cResult *= 1.0f / fTotalWeight;
   #endif
 
-  #if !b_iBlurAllChannels
-    #if b_iBlurAlphaOnly
-    cResult.rgb = 0;            // Discard colour.
-    #else
-    cResult.a = cValue.a;       // Use the original alpha.
-    #endif
-  #endif
+    [branch] if (!SC2_AXIS(b_iBlurAllChannels))
+    {
+        [branch] if (SC2_AXIS(b_iBlurAlphaOnly))
+            cResult.rgb = 0;        // Discard colour.
+        else
+            cResult.a = cValue.a;   // Use the original alpha.
+    }
 
   #if b_iDepthScaledBlur
     cResult.rgb = lerp(cValue.rgb, cResult.rgb, cValue.a);
@@ -646,16 +648,17 @@ float4 ppqHaloCopy(PostProcessQuadPSInput vertOut)
 // pspostprocess.fx : HaloSample.
 float4 ppqHaloSample(float2 vUV)
 {
-#if b_iConstrainToViewport
-    vUV = max(vUV, psGlobals.vPostProcessViewport.xy);
-    vUV = min(vUV, psGlobals.vPostProcessViewport.zw);
-#endif
+    [branch] if (SC2_AXIS(b_iConstrainToViewport))
+    {
+        vUV = max(vUV, psGlobals.vPostProcessViewport.xy);
+        vUV = min(vUV, psGlobals.vPostProcessViewport.zw);
+    }
     return p_sSrcMap_t.Sample(p_sSamp, vUV);
 }
 
 void ppqHaloPrepareSingle(float4 cInput, float fOffset, inout float4 cResult)
 {
-#if b_iBlurAllChannels
+    [branch] if (SC2_AXIS(b_iBlurAllChannels))
     {
         float testValue = (1.0 - cInput.a) + fOffset;
         if (testValue < cResult.a)
@@ -664,12 +667,11 @@ void ppqHaloPrepareSingle(float4 cInput, float fOffset, inout float4 cResult)
             cResult.rgb = cInput.rgb;
         }
     }
-#else
+    else
     {
         float testValue = (1.0 - cInput.r) + fOffset;
         cResult.r = min(cResult.r, testValue);
     }
-#endif
 }
 
 float4 ppqHaloPrepare(PostProcessQuadPSInput vertOut)
@@ -677,11 +679,10 @@ float4 ppqHaloPrepare(PostProcessQuadPSInput vertOut)
     float2 vUV = vertOut.UV(0).xy;
     float4 cResult = p_sSrcMap_t.Sample(p_sSamp, vUV);
 
-#if b_iBlurAllChannels
-    cResult.a = (1.0 - cResult.a);
-#else
-    cResult.r = (1.0 - cResult.r);
-#endif
+    [branch] if (SC2_AXIS(b_iBlurAllChannels))
+        cResult.a = (1.0 - cResult.a);
+    else
+        cResult.r = (1.0 - cResult.r);
 
     float texOffset = psGlobals.vRecipSrcSizeOffset.y;
     float radius = 1.0 / HALO_RADIUS_MULTIPLIER;
@@ -704,18 +705,17 @@ void ppqHaloBlurSingle(float4 cInput, float fDimSq, inout float fMinSq, inout fl
 {
     float testSq, test;
 
-    test = (b_iBlurAllChannels) ? cInput.a : cInput.r;
+    test = SC2_AXIS(b_iBlurAllChannels) ? cInput.a : cInput.r;
     test *= HALO_RADIUS_MULTIPLIER;
     testSq = test * test + fDimSq;
 
     if (testSq < fMinSq)
     {
         fMinSq = testSq;
-#if b_iBlurAllChannels
-        cResult.rgb = cInput.rgb;
-#else
-        cResult.r = cInput.r;
-#endif
+        [branch] if (SC2_AXIS(b_iBlurAllChannels))
+            cResult.rgb = cInput.rgb;
+        else
+            cResult.r = cInput.r;
     }
 }
 
@@ -723,7 +723,7 @@ float4 ppqHaloBlur(PostProcessQuadPSInput vertOut)
 {
     float2 vUV = vertOut.UV(0).xy;
     float4 cResult = p_sSrcMap_t.Sample(p_sSamp, vUV);
-    float minSq = (b_iBlurAllChannels) ? cResult.a : cResult.r;
+    float minSq = SC2_AXIS(b_iBlurAllChannels) ? cResult.a : cResult.r;
     minSq = minSq * minSq * HALO_RADIUS_MULTIPLIER * HALO_RADIUS_MULTIPLIER;
 
     // Inside the blurred object: write nothing.
@@ -748,24 +748,23 @@ float4 ppqHaloBlur(PostProcessQuadPSInput vertOut)
 
     // Halo mode determines the strength curve.
     float strength = 0.f;
-#if (b_iHaloBlurMode == HALOBLUR_GAUSSIAN)
+    const int iHaloBlurMode = SC2_AXIS(b_iHaloBlurMode);
+    [branch] if (iHaloBlurMode == HALOBLUR_GAUSSIAN)
     {
         float weight = exp(-minSq * psGlobals.fHaloRadiusRcp);
         strength = max(weight, 0.0);
     }
-#elif (b_iHaloBlurMode == HALOBLUR_LINEAR)
-    strength = max(1.0 - (sqrt(minSq) * psGlobals.fHaloRadiusRcp), 0.0);
-#elif (b_iHaloBlurMode == HALOBLUR_QUADRATIC)
-    strength = max(1.0 - (minSq * psGlobals.fHaloRadiusRcp), 0.0);
-#elif (b_iHaloBlurMode == HALOBLUR_SHARP)
-    strength = max(1.0 - (minSq * minSq * minSq * minSq * psGlobals.fHaloRadiusRcp), 0.0);
-#endif
+    else [branch] if (iHaloBlurMode == HALOBLUR_LINEAR)
+        strength = max(1.0 - (sqrt(minSq) * psGlobals.fHaloRadiusRcp), 0.0);
+    else [branch] if (iHaloBlurMode == HALOBLUR_QUADRATIC)
+        strength = max(1.0 - (minSq * psGlobals.fHaloRadiusRcp), 0.0);
+    else [branch] if (iHaloBlurMode == HALOBLUR_SHARP)
+        strength = max(1.0 - (minSq * minSq * minSq * minSq * psGlobals.fHaloRadiusRcp), 0.0);
 
-#if b_iBlurAllChannels
-    cResult.a = strength;
-#else
-    cResult = float4(strength, strength, strength, strength);
-#endif
+    [branch] if (SC2_AXIS(b_iBlurAllChannels))
+        cResult.a = strength;
+    else
+        cResult = float4(strength, strength, strength, strength);
     return cResult;
 }
 
@@ -781,10 +780,9 @@ float ppqComputeCOC(float depth)
 float4 ppqTex2DOffset(Texture2D<float4> t, float2 vUV, float2 vOffset, float2 vImageSize)
 {
     float2 vUVFinal = vUV + vOffset * float2(1.0f / vImageSize.x, 1.0f / vImageSize.y);
-#if b_iConstrainToViewport
-    vUVFinal = clamp(vUVFinal, psGlobals.vPostProcessViewport.xy,
-                     psGlobals.vPostProcessViewport.zw);
-#endif
+    [branch] if (SC2_AXIS(b_iConstrainToViewport))
+        vUVFinal = clamp(vUVFinal, psGlobals.vPostProcessViewport.xy,
+                         psGlobals.vPostProcessViewport.zw);
     return t.Sample(p_sSamp, vUVFinal);
 }
 
@@ -847,7 +845,7 @@ float4 ppqDOF(PostProcessQuadPSInput vertOut)
     float3 cColor;
     float fAlpha = 1;
     float4 weights;
-#if b_iDOFDotBlend
+    [branch] if (SC2_AXIS(b_iDOFDotBlend))
     {
         // Cross-blend weights for each sample:
         //   0     -> d0        : sharp -> small blur
@@ -862,7 +860,7 @@ float4 ppqDOF(PostProcessQuadPSInput vertOut)
                + weights.w * cLarge.rgb;
         fAlpha = 1;
     }
-#else
+    else
     {
         float3 cColorA;
         float3 cColorB;
@@ -893,7 +891,6 @@ float4 ppqDOF(PostProcessQuadPSInput vertOut)
         cColor = lerp(cColorA, cColorB, t).rgb;
         fAlpha = 1;
     }
-#endif
 
 #if ((b_iDOFDebug > DOFDEBUG_LARGE) && (b_iDOFDebug != DOFDEBUG_ALPHA))
     fAlpha = 1;
@@ -1136,7 +1133,7 @@ float4 ppqFxaaPixelShader(float2 pos, float4 posPos, float2 vRcpFrame, float4 rc
     // Too low a luma range: the pixel does not suffer from aliasing.
     if (fLumaRange < fLumaRangeMaxClamped)
     {
-        if ((b_iAAMode == AAMODE_SUBPIXEL) || (b_iAAMode == AAMODE_EDGEDIRECTION))
+        if ((SC2_AXIS(b_iAAMode) == AAMODE_SUBPIXEL) || (SC2_AXIS(b_iAAMode) == AAMODE_EDGEDIRECTION))
             return float4(0, 0, 0, 0);
         else
             return cCenter;
@@ -1171,7 +1168,7 @@ float4 ppqFxaaPixelShader(float2 pos, float4 posPos, float2 vRcpFrame, float4 rc
 
         bHorizontal = fEdgeHorzCombined >= fEdgeVertCombined;
 
-        if (b_iAAMode == AAMODE_EDGEDIRECTION)
+        if (SC2_AXIS(b_iAAMode) == AAMODE_EDGEDIRECTION)
             return float4(0, (bHorizontal) ? 1.0 : 0, (bHorizontal) ? 0 : 1.0, 0);
 
         // Subpixel aliasing.
@@ -1193,7 +1190,7 @@ float4 ppqFxaaPixelShader(float2 pos, float4 posPos, float2 vRcpFrame, float4 rc
 
         fSubpixel = fSubpixelFinal * psGlobals.vAASubPixel.x;
 
-        if (b_iAAMode == AAMODE_SUBPIXEL)
+        if (SC2_AXIS(b_iAAMode) == AAMODE_SUBPIXEL)
             return float4(1.0, fSubpixel, 0.0, 0.0);
     }
 
@@ -1430,48 +1427,44 @@ public float4 postprocessquad_ps_main(PostProcessQuadPSInput vertOut) : SV_Targe
     }
 #endif
 
-#if (b_iInputChannelFilter == CHANNEL_RED)
-    cResult = cResult.r;
-#elif (b_iInputChannelFilter == CHANNEL_GREEN)
-    cResult = cResult.g;
-#elif (b_iInputChannelFilter == CHANNEL_BLUE)
-    cResult = cResult.b;
-#elif (b_iInputChannelFilter == CHANNEL_ALPHA)
-    cResult = cResult.a;
-#endif
+    const int iInputChannelFilter  = SC2_AXIS(b_iInputChannelFilter);
+    const int iOutputChannelFilter = SC2_AXIS(b_iOutputChannelFilter);
+    const int iHaloRastermode      = SC2_AXIS(b_iHaloRastermode);
 
-#if ((b_iHaloRastermode == HALO_ALPHA) && (b_iInputChannelFilter != CHANNEL_ALL))
-    cResult.rgb = float3(1.0, 1.0, 1.0);
-#endif
+    [branch] if (iInputChannelFilter == CHANNEL_RED)
+        cResult = cResult.r;
+    else [branch] if (iInputChannelFilter == CHANNEL_GREEN)
+        cResult = cResult.g;
+    else [branch] if (iInputChannelFilter == CHANNEL_BLUE)
+        cResult = cResult.b;
+    else [branch] if (iInputChannelFilter == CHANNEL_ALPHA)
+        cResult = cResult.a;
 
-#if b_iScaleOutput
-    cResult *= psGlobals.vScale;
-#endif
-#if b_iAddToOutput
-    cResult += psGlobals.fAdd;
-#endif
+    [branch] if (iHaloRastermode == HALO_ALPHA && iInputChannelFilter != CHANNEL_ALL)
+        cResult.rgb = float3(1.0, 1.0, 1.0);
 
-#if (b_iOutputChannelFilter == CHANNEL_RED)
-    cResult = cResult.r;
-#elif (b_iOutputChannelFilter == CHANNEL_GREEN)
-    cResult = cResult.g;
-#elif (b_iOutputChannelFilter == CHANNEL_BLUE)
-    cResult = cResult.b;
-#elif (b_iOutputChannelFilter == CHANNEL_ALPHA)
-    cResult = cResult.a;
-#endif
+    [branch] if (SC2_AXIS(b_iScaleOutput))
+        cResult *= psGlobals.vScale;
+    [branch] if (SC2_AXIS(b_iAddToOutput))
+        cResult += psGlobals.fAdd;
 
-#if b_iClampNegativeOutput
-    cResult = max(float4(0.0f, 0.0f, 0.0f, 0.0f), cResult);
-#endif
+    [branch] if (iOutputChannelFilter == CHANNEL_RED)
+        cResult = cResult.r;
+    else [branch] if (iOutputChannelFilter == CHANNEL_GREEN)
+        cResult = cResult.g;
+    else [branch] if (iOutputChannelFilter == CHANNEL_BLUE)
+        cResult = cResult.b;
+    else [branch] if (iOutputChannelFilter == CHANNEL_ALPHA)
+        cResult = cResult.a;
 
-#if b_iPostMaskModulate
-    cResult *= psGlobals.vPostMaskColor;
-#endif
+    [branch] if (SC2_AXIS(b_iClampNegativeOutput))
+        cResult = max(float4(0.0f, 0.0f, 0.0f, 0.0f), cResult);
 
-#if (b_iHaloRastermode == HALO_MUL)
-    cResult = lerp(float4(1.0, 1.0, 1.0, 1.0), cResult, cResult.a);
-#endif
+    [branch] if (SC2_AXIS(b_iPostMaskModulate))
+        cResult *= psGlobals.vPostMaskColor;
+
+    [branch] if (iHaloRastermode == HALO_MUL)
+        cResult = lerp(float4(1.0, 1.0, 1.0, 1.0), cResult, cResult.a);
 
 #if b_iAlphaTest
     sc2_clip(cResult.a - psGlobals.fAlphaThreshold);

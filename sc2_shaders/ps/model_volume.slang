@@ -9,6 +9,7 @@
 // VolumeColor layer is always constant-colour), so it is omitted.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #define VOLUME_TYPE_UNIFORM 0
 
@@ -65,11 +66,10 @@ float4 volumeUniform(ModelPSInput vertOut)
     fThickness = max(0.0f, fThickness);
 
     float fogDensity;
-  #if (b_iVolumeFalloffType == EXPONENTIAL_FOG)
-    fogDensity = 1.0f - saturate(exp(-fThickness));
-  #else
-    fogDensity = saturate(fThickness);
-  #endif
+    [branch] if (SC2_AXIS(b_iVolumeFalloffType) == EXPONENTIAL_FOG)
+        fogDensity = 1.0f - saturate(exp(-fThickness));
+    else
+        fogDensity = saturate(fThickness);
 
     float3 cColor = float3(1, 1, 1);
   #if b_iVolumeColorLayerEnable
@@ -80,9 +80,8 @@ float4 volumeUniform(ModelPSInput vertOut)
                                  1.0f, float3(0, 0, 0), tp).rgb;
     }
   #endif
-  #if b_iVolumeMod
-    cColor *= fogDensity;
-  #endif
+    [branch] if (SC2_AXIS(b_iVolumeMod))
+        cColor *= fogDensity;
     return float4(cColor, fogDensity);
 #else
     return float4(0, 0, 0, 0);

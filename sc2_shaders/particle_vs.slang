@@ -32,6 +32,34 @@
 implementing sc2_shaders;
 
 #include "vs/model_vs_defines.slangh"
+#include "types/perm_cb.slangh"
+
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_clampedTailLength
+#define b_clampedTailLength 0
+#endif
+#ifndef b_fixedTailLength
+#define b_fixedTailLength 0
+#endif
+#ifndef b_iParticleColorInterpolation
+#define b_iParticleColorInterpolation 0
+#endif
+#ifndef b_iParticleRotationInterpolation
+#define b_iParticleRotationInterpolation 0
+#endif
+#ifndef b_iParticleSizeInterpolation
+#define b_iParticleSizeInterpolation 0
+#endif
+#ifndef b_localSpace
+#define b_localSpace 0
+#endif
+#ifndef b_randomFlipBookStart
+#define b_randomFlipBookStart 0
+#endif
+#ifndef b_useProceduralPosition
+#define b_useProceduralPosition 0
+#endif
 
 // ---------------------------------------------------------------------------
 // particle.fx : Input — the (unpermuted) vertex declaration.
@@ -95,7 +123,7 @@ float4 vsEmitParticleVertexColor(ParticleVSStreamIn vertIn, float4 vSizeAndAge,
         vsGlobals.vMidKeyTimes[iBatchIndex].y,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].y,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].y,
-        b_iParticleColorInterpolation);
+        SC2_AXIS(b_iParticleColorInterpolation));
 
     cColor.a = vsInterpolateValue(
         vSizeAndAge.w,
@@ -103,7 +131,7 @@ float4 vsEmitParticleVertexColor(ParticleVSStreamIn vertIn, float4 vSizeAndAge,
         vsGlobals.vMidKeyTimes[iBatchIndex].z,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].z,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].z,
-        b_iParticleColorInterpolation);
+        SC2_AXIS(b_iParticleColorInterpolation));
 
     return cColor;
 }
@@ -143,7 +171,7 @@ float4 vsEmitParticleUV<let M : int, let I : int, let R : int>(
         }
         // NOTE: gated on b_randomFlipBookStart ALONE — the flipbook arm never
         // consults b_UVRandomOffsetEnable (that axis only drives the else arm).
-        if (b_randomFlipBookStart)
+        if (SC2_AXIS(b_randomFlipBookStart))
             iCell += (int)floor(vertIn.vNoiseVector.w);
 
         // NOTE the asymmetry, transcribed as-is: the COLUMN is a true integer
@@ -189,7 +217,7 @@ float vsGenerateRotation(float fAge, float3 vRotation, int iBatchIndex)
         vsGlobals.vMidKeyTimes[iBatchIndex].w,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].w,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].w,
-        b_iParticleRotationInterpolation);
+        SC2_AXIS(b_iParticleRotationInterpolation));
 }
 
 // ---------------------------------------------------------------------------
@@ -226,11 +254,11 @@ void vsCalculatePositionAndVelocity(inout ParticleVSStreamIn vertIn,
     {
         vertIn.vInterpolator1.xyz = vInstantaneousVelocity;
 
-        if (b_clampedTailLength)
+        if (SC2_AXIS(b_clampedTailLength))
         {
             float fSpeed = length(vInstantaneousVelocity);
             float fTailLength;
-            if (b_fixedTailLength)
+            if (SC2_AXIS(b_fixedTailLength))
                 fTailLength = vertIn.vInterpolator2.x * fSpeed * vSizeAndAge.xyz.x;
             else
                 fTailLength = max(vertIn.vInterpolator2.x,
@@ -252,7 +280,7 @@ void vsUnpackNormals(ParticleVSStreamIn vertIn, out float3 vRight, out float3 vU
 {
     if (b_iInstanceType == PARTICLE_EMITTER_ORIENTED)
     {
-        if (b_localSpace)
+        if (SC2_AXIS(b_localSpace))
         {
             // every particle takes the emitter's current rotation
             float4x4 mPRWorld = vsPRWorldMatrix(iBatchIndex);
@@ -345,13 +373,13 @@ public DefaultVSOutput particle_vs_main(ParticleVSStreamIn streamIn)
         vsGlobals.vMidKeyTimes[iBatchIndex].x,
         vsGlobals.vInversedMidKeyTimes[iBatchIndex].x,
         vsGlobals.vMidKeyHoldTimes[iBatchIndex].x,
-        b_iParticleSizeInterpolation);
+        SC2_AXIS(b_iParticleSizeInterpolation));
     vSizeAndAge.xyz = float3(fSizeInterp, fSizeInterp, fSizeInterp);
 
-    if (b_useProceduralPosition)
+    if (SC2_AXIS(b_useProceduralPosition))
         vsCalculatePositionAndVelocity(vertIn, vSizeAndAge, iBatchIndex);
 
-    if (b_localSpace)
+    if (SC2_AXIS(b_localSpace))
         vertIn.vPosition.xyz = mul(float4(vertIn.vPosition.xyz, 1),
                                    vsPRWorldMatrix(iBatchIndex)).xyz;
 
@@ -460,7 +488,7 @@ public DefaultVSOutput particle_vs_main(ParticleVSStreamIn streamIn)
         vertIn.vInterpolator1.xyz += vertIn.vNoiseVector.xyz;
 
         float fMag = length(vertIn.vInterpolator1.xyz);
-        if (b_localSpace)
+        if (SC2_AXIS(b_localSpace))
             vertIn.vInterpolator1.xyz = mul(vertIn.vInterpolator1.xyz,
                                             (float3x3)vsPRWorldMatrix(iBatchIndex));
 
@@ -468,7 +496,7 @@ public DefaultVSOutput particle_vs_main(ParticleVSStreamIn streamIn)
         float3 vRight = normalize((cross(vsGlobals.vCameraDirection, vDirectionVector)));
 
         float fTailLength;
-        if (b_fixedTailLength)
+        if (SC2_AXIS(b_fixedTailLength))
             fTailLength = vertIn.vInterpolator2.x;
         else
             fTailLength = max(vertIn.vInterpolator2.x, (fMag * vertIn.vInterpolator2.x));
@@ -488,7 +516,7 @@ public DefaultVSOutput particle_vs_main(ParticleVSStreamIn streamIn)
     }
     else if (b_iInstanceType == PARTICLE_PINNED)
     {
-        if (b_localSpace)
+        if (SC2_AXIS(b_localSpace))
             vertIn.vInterpolator2.xyz = mul(float4(vertIn.vInterpolator2.xyz, 1),
                                             vsPRWorldMatrix(iBatchIndex)).xyz;
 

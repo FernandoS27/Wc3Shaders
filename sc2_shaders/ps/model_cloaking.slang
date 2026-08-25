@@ -10,6 +10,19 @@
 
 implementing sc2_shaders;
 
+// SC2_LAYER_<Prop>: layer properties are also read OUTSIDE the setup
+// functions, and every such site has to go through the same accessor.
+#include "ps/model_layers_axes.slangh"
+
+// A `#if` tolerates an undefined axis; ordinary CODE does not, and the
+// convention only passes -D for NONZERO axes.  Converting these reads from
+// `#if` to a runtime `if` therefore needs their file-local defaults, or the
+// permutations where they are zero stop compiling.
+// (docs: the sc2_shaders file-scope rule.)
+#ifndef b_iCloakingEnvioOp
+#define b_iCloakingEnvioOp 0
+#endif
+
 #define CLOAKINGMODE_BLITOFFSCREEN    0
 #define CLOAKINGMODE_CLOAKTRANSPARENT 1
 #define CLOAKINGMODE_CLOAKOPAQUE      2
@@ -126,14 +139,20 @@ float4 cloaking(ModelPSInput vertOut, inout DeferredOutputs def)
     #endif
 
         // Simulate the reversed src/dst blend in the shader.
-    #if (b_iCloakingEnvioOp == LAYEROP_ADD)
-        rvalue.rgb = (1.0f - rvalue.a) * rvalue.rgb + rvalue.a * envio.rgb * envio.a;
-    #elif (b_iCloakingEnvioOp == LAYEROP_LERP)
-        rvalue.rgb = (1.0f - rvalue.a) * rvalue.rgb + rvalue.a * envio.rgb * envio.a;
-        rvalue.a = rvalue.a - rvalue.a * envio.a;
-    #else
-        rvalue.rgb *= 1.0f - rvalue.a;
-    #endif
+        const int sc2CloakOp = SC2_LAYER_Op(b_iCloakingEnvioOp);
+        [branch] if (sc2CloakOp == LAYEROP_ADD)
+        {
+            rvalue.rgb = (1.0f - rvalue.a) * rvalue.rgb + rvalue.a * envio.rgb * envio.a;
+        }
+        else [branch] if (sc2CloakOp == LAYEROP_LERP)
+        {
+            rvalue.rgb = (1.0f - rvalue.a) * rvalue.rgb + rvalue.a * envio.rgb * envio.a;
+            rvalue.a = rvalue.a - rvalue.a * envio.a;
+        }
+        else
+        {
+            rvalue.rgb *= 1.0f - rvalue.a;
+        }
     }
   #else
     rvalue.rgb *= 1.0f - rvalue.a;

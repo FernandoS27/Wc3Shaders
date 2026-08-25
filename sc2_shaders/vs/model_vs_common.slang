@@ -23,6 +23,31 @@ implementing sc2_shaders;
 // Compile-time axes + .fx enums (see the header: `__include` merges declarations
 // but not #defines, so each VS translation unit includes this itself).
 #include "vs/model_vs_defines.slangh"
+#include "types/perm_cb.slangh"
+
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_iBlendWeightCount
+#define b_iBlendWeightCount 0
+#endif
+#ifndef b_iUsePOMNew
+#define b_iUsePOMNew 0
+#endif
+#ifndef b_splatAttenuationEnabled
+#define b_splatAttenuationEnabled 0
+#endif
+#ifndef b_splatTextureProjectorEnabled
+#define b_splatTextureProjectorEnabled 0
+#endif
+#ifndef b_useIdentityBasis
+#define b_useIdentityBasis 0
+#endif
+#ifndef b_useNormalMapping
+#define b_useNormalMapping 0
+#endif
+#ifndef b_useParallaxMapping
+#define b_useParallaxMapping 0
+#endif
 
 // ---------------------------------------------------------------------------
 // common.fx helpers
@@ -89,12 +114,12 @@ float3 vsComputeTriPlanarBlendingWeights(float3 vNormal)
 float vsSplatAttenuationProjector(float3 worldPos, float4 vPlane, float halfHeight,
                                   float minHeight)
 {
-#if b_splatAttenuationEnabled
-    float d = abs(dot(float4(worldPos, 1.0f), vPlane));
-    return saturate((halfHeight - d) / (halfHeight - minHeight));
-#else
+    [branch] if (SC2_AXIS(b_splatAttenuationEnabled))
+    {
+        float d = abs(dot(float4(worldPos, 1.0f), vPlane));
+        return saturate((halfHeight - d) / (halfHeight - minHeight));
+    }
     return 1;
-#endif
 }
 
 // common.fx : ComputeHalfVector.  (The `if (false)` vertex-lighting variant in the
@@ -116,12 +141,16 @@ float3 vsComputeHalfVector(float3 vPosWS)
 float3 vsEmitParallaxVector(float3 vVertWS, float3 vEyeWS, float3 vNormal,
                             float3 vTangent, float3 vBinormal)
 {
-#if (b_useParallaxMapping == 1)
+    [branch] if (SC2_AXIS(b_useParallaxMapping) != 1)
+        return float3(0, 0, 0);
+
     float3 vPos = vEyeWS - vVertWS;
     float3 vEyeTS;
-  #if b_useIdentityBasis
-    vEyeTS = vPos * float3(1.0f, -1.0f, 1.0f);
-  #else
+    [branch] if (SC2_AXIS(b_useIdentityBasis))
+    {
+        vEyeTS = vPos * float3(1.0f, -1.0f, 1.0f);
+    }
+    else
     {
         float3x3 mWorldToTangent;
         mWorldToTangent[0] = normalize(vTangent);
@@ -129,11 +158,10 @@ float3 vsEmitParallaxVector(float3 vVertWS, float3 vEyeWS, float3 vNormal,
         mWorldToTangent[2] = vNormal;
         vEyeTS = normalize(mul(mWorldToTangent, vPos));
     }
-  #endif
 
-  #if b_iUsePOMNew
-    return vEyeTS.xyz;
-  #else
+    [branch] if (SC2_AXIS(b_iUsePOMNew))
+        return vEyeTS.xyz;
+
     float2 vParallaxDirection = normalize(vEyeTS.xy);
     float fLength = length(vEyeTS);
     // Parallax length grows with the divergent viewing angle.
@@ -141,10 +169,6 @@ float3 vsEmitParallaxVector(float3 vVertWS, float3 vEyeWS, float3 vNormal,
     return float3(vParallaxDirection * fParallaxLength
         * vsGlobals.vSpecularMultiplier_DepthBlendThreshold_HeightMapScale_AlphaFactor.z,
         0);
-  #endif
-#else
-    return float3(0, 0, 0);
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -289,18 +313,22 @@ int4 vsD3DCOLORtoUBYTE4(float4 v)
 }
 
 // Bone-blend the position/normal and — under normal mapping — the tangent basis.
-// b_iBlendWeightCount is a compile-time literal, so exactly one arm survives.
+// The count was a compile-time literal, so exactly one arm survived.  It is a
+// payload field now: the BLENDWEIGHT attribute is always a float4 and the arms
+// already read only as much of it as the count says, so nothing but the folding
+// changes (design section 3).
 void vsSkin(inout float4 vPosition, inout float3 vNormal, inout float3 vTangent,
             inout float3 vBinormal, float4 vBlendWeights, float4 vBlendIndices)
 {
     int4 iBoneIndices = vsD3DCOLORtoUBYTE4(vBlendIndices);
     float4 vSwizzledBlendWeights = vBlendWeights.zyxw;
     float3x4 mBlendMatrix = float3x4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    const int iBlendWeightCount = SC2_AXIS(b_iBlendWeightCount);
 
     // Skin position and normal.
-    if (b_iBlendWeightCount > 0)
+    if (iBlendWeightCount > 0)
     {
-        if (b_iBlendWeightCount == 1)
+        if (iBlendWeightCount == 1)
         {
             vPosition.xyz = mul(vsBlendMatrix(iBoneIndices[0]), vPosition);
             vNormal = mul(vsMat3(vsBlendMatrix(iBoneIndices[0])), vNormal);
@@ -308,7 +336,7 @@ void vsSkin(inout float4 vPosition, inout float3 vNormal, inout float3 vTangent,
         else
         {
             mBlendMatrix = vsBlendMatrix(iBoneIndices[0]) * vSwizzledBlendWeights[0];
-            if (b_iBlendWeightCount >= 2)
+            if (iBlendWeightCount >= 2)
             {
                 mBlendMatrix += vsBlendMatrix(iBoneIndices[1]) * vSwizzledBlendWeights[1];
                 mBlendMatrix += vsBlendMatrix(iBoneIndices[2]) * vSwizzledBlendWeights[2];
@@ -321,9 +349,9 @@ void vsSkin(inout float4 vPosition, inout float3 vNormal, inout float3 vTangent,
     }
 
     // Skin tangents and binormals (the original leaves them un-normalised).
-    if (b_useNormalMapping && b_iBlendWeightCount > 0)
+    if (SC2_AXIS(b_useNormalMapping) && iBlendWeightCount > 0)
     {
-        if (b_iBlendWeightCount == 1)
+        if (iBlendWeightCount == 1)
         {
             vTangent  = mul(vsBlendMatrix(iBoneIndices[0]), float4(vTangent, 0.0f));
             vBinormal = mul(vsBlendMatrix(iBoneIndices[0]), float4(vBinormal, 0.0f));
@@ -509,7 +537,7 @@ float4 vsGenUV<let iMapping : int, let iIndex : int>(
 
     // Replace uv0/uv1 with the auto-generated splat projector UVs.
     bool isProjectorChannel = (iMapping == UVMAP_EXPLICITUV0) || (iMapping == UVMAP_EXPLICITUV1);
-    if (b_splatTextureProjectorEnabled && isProjectorChannel)
+    if (SC2_AXIS(b_splatTextureProjectorEnabled) && isProjectorChannel)
     {
         vResult = vsGenSplatProjectiveTexture(vWorldPos, iSplatIndex);
         vResult.xy = vsNdc2Tex(vResult.xy / vResult.w);

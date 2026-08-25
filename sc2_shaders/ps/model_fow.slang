@@ -16,6 +16,7 @@
 // which is what makes the reference's referenced-constant set match ours.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 // psfow.fx FOW-mode enum.
 #define FOWMODE_STORM_SMOOTH    0
@@ -55,7 +56,9 @@ float2 ndc2Tex(float2 vNDC)
 // lands; on the non-MRT standard path the caller passes a stub and ignores it.
 float4 applyFogOfWar(float2 FOWUV, float4 cResult, inout float3 cDeferredDiffuse)
 {
-#if b_FOWEnabled
+    [branch] if (!SC2_AXIS(b_FOWEnabled))
+        return cResult;
+
     float4 cFOWFactor;
   #if b_SampleFOW
     #if (b_FOWMode == FOWMODE_STORM) || (b_FOWMode == FOWMODE_STORM_SMOOTH)
@@ -76,22 +79,21 @@ float4 applyFogOfWar(float2 FOWUV, float4 cResult, inout float3 cDeferredDiffuse
 
     float4 cDiffuseFOWFactor = cFOWFactor;
 
-  #if b_useBlendAdd
-    float blendFactor = cResult.a;
-    cDeferredDiffuse = lerp(cDeferredDiffuse.rgb,
-        lerp(cDeferredDiffuse.rgb, 1.0f, blendFactor) * cFOWFactor.rgb, cFOWFactor.a);
-    return float4(lerp(cResult.rgb,
-        lerp(cResult.rgb, 1.0f, blendFactor) * cFOWFactor.rgb, cFOWFactor.a), cResult.a);
-  #elif b_FOWAdditiveScale
-    cDeferredDiffuse = lerp(cDeferredDiffuse.rgb,
-        cDeferredDiffuse.rgb * cDiffuseFOWFactor.rgb, cDiffuseFOWFactor.a);
-    return float4(lerp(cResult.rgb,
-        cResult.rgb * cFOWFactor.rgb, cFOWFactor.a), cResult.a);
-  #else
+    [branch] if (SC2_AXIS(b_useBlendAdd))
+    {
+        float blendFactor = cResult.a;
+        cDeferredDiffuse = lerp(cDeferredDiffuse.rgb,
+            lerp(cDeferredDiffuse.rgb, 1.0f, blendFactor) * cFOWFactor.rgb, cFOWFactor.a);
+        return float4(lerp(cResult.rgb,
+            lerp(cResult.rgb, 1.0f, blendFactor) * cFOWFactor.rgb, cFOWFactor.a), cResult.a);
+    }
+    [branch] if (SC2_AXIS(b_FOWAdditiveScale))
+    {
+        cDeferredDiffuse = lerp(cDeferredDiffuse.rgb,
+            cDeferredDiffuse.rgb * cDiffuseFOWFactor.rgb, cDiffuseFOWFactor.a);
+        return float4(lerp(cResult.rgb,
+            cResult.rgb * cFOWFactor.rgb, cFOWFactor.a), cResult.a);
+    }
     cDeferredDiffuse = lerp(cDeferredDiffuse.rgb, cDiffuseFOWFactor.rgb, cDiffuseFOWFactor.a);
     return float4(lerp(cResult.rgb, cFOWFactor.rgb, cFOWFactor.a), cResult.a);
-  #endif
-#else
-    return cResult;
-#endif
 }

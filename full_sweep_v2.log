@@ -1,0 +1,45 @@
+sc2_validate_all: families=Simple,Model,Foliage,Ribbon,Particle,SplatDirect,SplatDeferred,TerrainBlend,Water,RenderPlane,MinimapTerrain,LensFlare,Flash,HDR,Image,Bokeh,DeferredLight,PostProcessQuad stages=['vs', 'ps'] sample=full jobs=8 trials=8
+
+  Simple        vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  Simple        ps  6/6 matched  (exact=6/6)  [2 blobs served 6 slots]
+  Model         vs  25696/25696 matched  (exact=4082/4082 trans=1383/1383 reassoc=20231/20231)  [8204 blobs served 25696 slots]
+  Model         ps  50318/50322 matched  (exact=13930/13930 trans=35988/35988 pom=400/404  FAILS=4)  [5163 blobs served 50322 slots]
+      FAIL slot=19678  [pom] worst: 0.9182 > 0.9
+      FAIL slot=21666  [pom] worst: 0.9644 > 0.9
+      FAIL slot=23681  [pom] worst: 0.9931 > 0.9
+      FAIL slot=31237  [pom] worst: 0.9931 > 0.9
+  Foliage       vs  96/96 matched  (exact=96/96)  [58 blobs served 96 slots]
+  Foliage       ps  349/349 matched  (exact=140/140 trans=209/209)  [164 blobs served 349 slots]
+  Ribbon        vs  2192/2192 matched  (exact=2192/2192)  [1548 blobs served 2192 slots]
+  Ribbon        ps  3161/3161 matched  (exact=2029/2029 trans=1132/1132)  [549 blobs served 3161 slots]
+  Particle      vs  6154/6154 matched  (exact=6154/6154)  [1952 blobs served 6154 slots]
+  Particle      ps  10637/10637 matched  (exact=6917/6917 trans=3702/3702 pom=18/18)  [758 blobs served 10637 slots]
+  SplatDirect   vs  196/196 matched  (exact=196/196)  [123 blobs served 196 slots]
+  SplatDirect   ps  3488/3488 matched  (exact=1416/1416 trans=1962/1962 pom=110/110)  [765 blobs served 3488 slots]
+  SplatDeferred vs  12/12 matched  (exact=12/12)  [4 blobs served 12 slots]
+  SplatDeferred ps  468/468 matched  (exact=72/72 trans=396/396)  [144 blobs served 468 slots]
+  TerrainBlend  vs  9/9 matched  (exact=9/9)  [9 blobs served 9 slots]
+  TerrainBlend  ps  54/54 matched  (exact=54/54)  [54 blobs served 54 slots]
+  Water         vs  17/17 matched  (exact=17/17)  [7 blobs served 17 slots]
+  Water         ps  66/66 matched  (exact=5/5 trans=61/61)  [61 blobs served 66 slots]
+  RenderPlane   vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  RenderPlane   ps  4/4 matched  (exact=4/4)  [4 blobs served 4 slots]
+  MinimapTerrain vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  MinimapTerrain ps  4/4 matched  (exact=4/4)  [4 blobs served 4 slots]
+  LensFlare     vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  LensFlare     ps  8/8 matched  (exact=8/8)  [8 blobs served 8 slots]
+  Flash         vs  5/5 matched  (exact=5/5)  [5 blobs served 5 slots]
+  Flash         ps  14/14 matched  (exact=14/14)  [14 blobs served 14 slots]
+  HDR           vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  HDR           ps  320/320 matched  (exact=320/320)  [4 blobs served 320 slots]
+  Image         vs  7/7 matched  (exact=7/7)  [7 blobs served 7 slots]
+  Image         ps  3520/3520 matched  (exact=704/704 reassoc=2816/2816)  [28 blobs served 3520 slots]
+  Bokeh         vs  1/1 matched  (exact=1/1)  [1 blobs served 1 slots]
+  Bokeh         ps  21/21 matched  (exact=21/21)  [21 blobs served 21 slots]
+  DeferredLight vs  8/8 matched  (exact=8/8)  [4 blobs served 8 slots]
+  DeferredLight ps  82/82 matched  (exact=50/50 trans=32/32)  [36 blobs served 82 slots]
+  PostProcessQuad vs  23/23 matched  (exact=23/23)  [23 blobs served 23 slots]
+  PostProcessQuad ps  1031/1031 matched  (exact=1031/1031)  [222 blobs served 1031 slots]
+
+=== SUMMARY ===
+matched 107972/107976 counted perms  (ref_reject=0 excluded)  -> FAILURES PRESENT

@@ -31,6 +31,31 @@
 implementing sc2_shaders;
 
 #include "vs/model_vs_defines.slangh"
+#include "types/perm_cb.slangh"
+
+// Axes read as CODE need a file-local default: only NONZERO axes are passed
+// as -D, so a zero one would otherwise be an undefined identifier.
+#ifndef b_UseLightingRegions
+#define b_UseLightingRegions 0
+#endif
+#ifndef b_UseVertexBasedAmbientOcclusion
+#define b_UseVertexBasedAmbientOcclusion 0
+#endif
+#ifndef b_iDirectionalLightCount
+#define b_iDirectionalLightCount 0
+#endif
+#ifndef b_iUseSpecular
+#define b_iUseSpecular 0
+#endif
+#ifndef b_iVertexLightingMode
+#define b_iVertexLightingMode 0
+#endif
+#ifndef b_useDblLambert
+#define b_useDblLambert 0
+#endif
+#ifndef b_useLighting
+#define b_useLighting 0
+#endif
 
 // ---------------------------------------------------------------------------
 // lightingmodels.fx : BlinnShading  (the only model reachable from a VS)
@@ -42,7 +67,7 @@ float3 vsBlinnShading(float3 vNormalWS, float3 vLightDirWS, bool bUseSpecular,
 {
     float3 vLightDiffuseSpecular;
     vLightDiffuseSpecular.x = dot(vNormalWS, vLightDirWS);
-    if (b_useDblLambert)
+    if (SC2_AXIS(b_useDblLambert))
         vLightDiffuseSpecular.x = -1.0f + vLightDiffuseSpecular.x * 2.0f;
 
     if (bUseSpecular)
@@ -188,13 +213,15 @@ void vsLighting<let MODE : int>(float3 vPositionWS, float3 vNormalWS,
     float3 cSpecular;
 
     // isPerPixel == false, so both gates reduce to "vertex lighting is FULL".
+    const int iVertexLightingMode = SC2_AXIS(b_iVertexLightingMode);
+    const int iDirectionalLightCount = SC2_AXIS(b_iDirectionalLightCount);
     const bool bShadowLight = (MODE != VS_EXCLUDE_SHADOWLIGHT)
-                           && (b_iVertexLightingMode == VS_VERTEXLIGHTING_FULL);
+                           && (iVertexLightingMode == VS_VERTEXLIGHTING_FULL);
     const bool bSecondaryLights = (MODE != VS_SHADOWLIGHT_ONLY)
-                               && (b_iDirectionalLightCount > 1)
-                               && (b_iVertexLightingMode == VS_VERTEXLIGHTING_FULL);
+                               && (iDirectionalLightCount > 1)
+                               && (iVertexLightingMode == VS_VERTEXLIGHTING_FULL);
 
-    if (b_UseLightingRegions && (bShadowLight || bSecondaryLights))
+    if (SC2_AXIS(b_UseLightingRegions) && (bShadowLight || bSecondaryLights))
     {
         cAmbient = float3(0, 0, 0);
         cSpecular = float3(0, 0, 0);
@@ -228,7 +255,7 @@ void vsLighting<let MODE : int>(float3 vPositionWS, float3 vNormalWS,
         // Key shadow light.
         cLightDiffuseSpecular = vsComputeDirectionalLight(
             vNormalWS, vsGlobals.directionalLights[0].vDirection.xyz, vHalfVecWS,
-            b_iUseSpecular, fSpecularity);
+            SC2_AXIS(b_iUseSpecular) != 0, fSpecularity);
         vsAddLightContribution(true, cDirectional0, cLightDiffuseSpecular, cShadowColor,
                                cSpecular, curTotalDiffuse, curTotalSpecular,
                                curTotalSpecular2);
@@ -237,14 +264,13 @@ void vsLighting<let MODE : int>(float3 vPositionWS, float3 vNormalWS,
     if (MODE != VS_SHADOWLIGHT_ONLY)
     {
         // Ambient term (skipped for PARTIAL on the vertex side).
-        if (b_iVertexLightingMode != VS_VERTEXLIGHTING_PARTIAL)
+        if (iVertexLightingMode != VS_VERTEXLIGHTING_PARTIAL)
             curTotalDiffuse += cAmbient * fAmbientOcclusion;
 
         // Secondary directional lights, i = 1 .. count-1.  AddLightContribution's
         // shadow argument here is the scalar fAmbientOcclusion, broadcast.
         if (bSecondaryLights)
         {
-#if (b_iDirectionalLightCount > 1)
             cLightDiffuseSpecular = vsComputeDirectionalLight(
                 vNormalWS, vsGlobals.directionalLights[1].vDirection.xyz, vHalfVecWS,
                 false, fSpecularity);
@@ -253,17 +279,17 @@ void vsLighting<let MODE : int>(float3 vPositionWS, float3 vNormalWS,
                                           fAmbientOcclusion, fAmbientOcclusion),
                                    cSpecular, curTotalDiffuse, curTotalSpecular,
                                    curTotalSpecular2);
-#endif
-#if (b_iDirectionalLightCount > 2)
-            cLightDiffuseSpecular = vsComputeDirectionalLight(
-                vNormalWS, vsGlobals.directionalLights[2].vDirection.xyz, vHalfVecWS,
-                false, fSpecularity);
-            vsAddLightContribution(false, cDirectional2, cLightDiffuseSpecular,
-                                   float4(fAmbientOcclusion, fAmbientOcclusion,
-                                          fAmbientOcclusion, fAmbientOcclusion),
-                                   cSpecular, curTotalDiffuse, curTotalSpecular,
-                                   curTotalSpecular2);
-#endif
+            [branch] if (iDirectionalLightCount > 2)
+            {
+                cLightDiffuseSpecular = vsComputeDirectionalLight(
+                    vNormalWS, vsGlobals.directionalLights[2].vDirection.xyz, vHalfVecWS,
+                    false, fSpecularity);
+                vsAddLightContribution(false, cDirectional2, cLightDiffuseSpecular,
+                                       float4(fAmbientOcclusion, fAmbientOcclusion,
+                                              fAmbientOcclusion, fAmbientOcclusion),
+                                       cSpecular, curTotalDiffuse, curTotalSpecular,
+                                       curTotalSpecular2);
+            }
         }
 
         // Single-pass point + spot lights — the VERTEX variant of the mode gate.
@@ -333,7 +359,7 @@ float3 vsEmitDiffuse(DefaultVSOutput vertOut, float3 vPosition, float3 vNormalWS
 {
     cVertexShadowSpecularLighting = float3(0, 0, 0);
     float3 cVertexDiffuseLighting;
-    if (b_useLighting == 0)
+    if (SC2_AXIS(b_useLighting) == 0)
     {
         cVertexDiffuseLighting = float3(1, 1, 1);
         cVertexSpecularLighting = float3(0, 0, 0);
@@ -352,7 +378,7 @@ float3 vsEmitDiffuse(DefaultVSOutput vertOut, float3 vPosition, float3 vNormalWS
             cVertexShadowSpecularLighting2, vHalfVecWS);
 #else
         float fAmbientOcclusion;
-        if (b_UseVertexBasedAmbientOcclusion)
+        if (SC2_AXIS(b_UseVertexBasedAmbientOcclusion))
             fAmbientOcclusion = vertOut.VectorUI1().a;
         else
             fAmbientOcclusion = 1.0f;
@@ -378,7 +404,7 @@ float3 vsEmitShadowDiffuse(float3 vNormalWS, float4 vLightingRegions,
                            inout float3 cVertexShadowSpecularLighting2)
 {
     float3 cVertexDiffuseLighting;
-    if (b_useLighting == 0)
+    if (SC2_AXIS(b_useLighting) == 0)
     {
         cVertexDiffuseLighting = float3(1, 1, 1);
     }

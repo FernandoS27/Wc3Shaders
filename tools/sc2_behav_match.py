@@ -83,17 +83,38 @@ def cb_write(cb, byte_off, floats):
         cb[row][lane] = _f2b(f)
 
 
+def cb_write_words(cb, byte_off, words):
+    """Write RAW uint32 words into a constant bank at `byte_off`.
+
+    cb_write converts through _f2b, which is right for a value the shader reads as
+    a float.  The permutation payload is packed BITFIELDS the shader reads with
+    ubfe/and, so pushing it through a float conversion would rewrite every word.
+    """
+    for k, w in enumerate(words):
+        pos = byte_off + 4 * k
+        row, lane = pos // 16, (pos % 16) // 4
+        while row >= len(cb):
+            cb.append([0, 0, 0, 0])
+        cb[row][lane] = int(w) & 0xFFFFFFFF
+
+
 def input_regs(asm):
     return sorted(set(int(m.group(1))
                       for m in re.finditer(r"dcl_input(?:_ps\s+\w+)? v(\d+)", asm)))
 
 
-def cb_rows(asm, floor=260):
-    """Rows to allocate for bank 0 = the shader's declared CB0[N] length.
+def cb_rows(asm, floor=260, slot=0):
+    """Rows to allocate for constant bank `slot` = its declared CB<slot>[N] length.
     Model VS with skinning declares large CB0[] (bone-matrix array), so a fixed
-    260 under-allocates and dynamically-indexed reads go out of bounds."""
-    n = floor
-    for m in re.finditer(r"dcl_constantbuffer\s+(?:CB|cb)0\[(\d+)\]", asm):
+    260 under-allocates and dynamically-indexed reads go out of bounds.
+
+    The 260-row floor applies to bank 0 only: it is there because bank 0 is the big
+    engine globals block, whose reflection under-reports dynamically-indexed arrays.
+    A higher bank (the permutation payload at b2) is sized purely by its own
+    declaration, so it allocates exactly what the shader reads.
+    """
+    n = floor if slot == 0 else 0
+    for m in re.finditer(r"dcl_constantbuffer\s+(?:CB|cb)%d\[(\d+)\]" % slot, asm):
         n = max(n, int(m.group(1)))
     return n + 4
 

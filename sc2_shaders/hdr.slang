@@ -31,6 +31,10 @@
 
 implementing sc2_shaders;
 
+// SC2_AXIS comes from here -- one macro for the whole module now that the payload
+// layout is global; the per-axis SC2_PERMDATA_ flag does the selecting.
+#include "types/perm_cb.slangh"
+
 #ifndef b_iHDRPass
 #define b_iHDRPass 0
 #endif
@@ -110,23 +114,36 @@ public struct HDRPSInput
 float hdrTonemap(float fSrcL)
 {
     float fTonemappedL = 0.f;
-#if (b_iOperator == REINHARD_OPERATOR)
-    fTonemappedL = pow(fSrcL, psGlobals.fContrast) * psGlobals.fExposure;
-    float fTonemappedLScaled =
-        fTonemappedL * (1 + (fTonemappedL / (psGlobals.fWhitePoint * psGlobals.fWhitePoint)));
-    fTonemappedL = fTonemappedLScaled / (1 + fTonemappedL);
-#elif (b_iOperator == EXPONENTIONAL_OPERATOR)
-    fTonemappedL = 1.0f - exp(-psGlobals.fExposure * pow(fSrcL, psGlobals.fContrast));
-#elif (b_iOperator == LOGARITHMIC_OPERATOR)
-    fTonemappedL = log(pow(fSrcL, psGlobals.fContrast) + 1) / log(psGlobals.fExposure + 1);
-#elif (b_iOperator == LINEAR_OPERATOR)
-    fTonemappedL = pow(fSrcL, psGlobals.fContrast);
-#elif (b_iOperator == FILMIC_OPERATOR)
-    // fSrcL = pow(fSrcL, p_fContrast) is commented out upstream (always 1.0f).
-    fTonemappedL = pow(fSrcL, 2.2f) * psGlobals.fExposure;
-    float x = fTonemappedL;
-    fTonemappedL = (x * (12.3f * x + .5f)) / (x * (12.3f * x + 4.0f) + 0.02f);
-#endif
+    // Five operators over the same scalar: no texture, no output, no discard and no
+    // loop differs between them, so the operator is a constant-buffer field and this
+    // ladder is a scalar branch.  It alone is a 5x multiplier on the retail grid.
+    const int sc2Operator = SC2_AXIS(b_iOperator);
+    [branch] if (sc2Operator == REINHARD_OPERATOR)
+    {
+        fTonemappedL = pow(fSrcL, psGlobals.fContrast) * psGlobals.fExposure;
+        float fTonemappedLScaled =
+            fTonemappedL * (1 + (fTonemappedL / (psGlobals.fWhitePoint * psGlobals.fWhitePoint)));
+        fTonemappedL = fTonemappedLScaled / (1 + fTonemappedL);
+    }
+    else [branch] if (sc2Operator == EXPONENTIONAL_OPERATOR)
+    {
+        fTonemappedL = 1.0f - exp(-psGlobals.fExposure * pow(fSrcL, psGlobals.fContrast));
+    }
+    else [branch] if (sc2Operator == LOGARITHMIC_OPERATOR)
+    {
+        fTonemappedL = log(pow(fSrcL, psGlobals.fContrast) + 1) / log(psGlobals.fExposure + 1);
+    }
+    else [branch] if (sc2Operator == LINEAR_OPERATOR)
+    {
+        fTonemappedL = pow(fSrcL, psGlobals.fContrast);
+    }
+    else [branch] if (sc2Operator == FILMIC_OPERATOR)
+    {
+        // fSrcL = pow(fSrcL, p_fContrast) is commented out upstream (always 1.0f).
+        fTonemappedL = pow(fSrcL, 2.2f) * psGlobals.fExposure;
+        float x = fTonemappedL;
+        fTonemappedL = (x * (12.3f * x + .5f)) / (x * (12.3f * x + 4.0f) + 0.02f);
+    }
     return fTonemappedL;
 }
 
@@ -148,15 +165,14 @@ public float4 hdr_ps_main(HDRPSInput input) : SV_Target0
     // Retail only ever ships MODE_TONEMAP.
 #if (b_iHDRPass == HDR_MODE_TONEMAP)
     float3 cColor = p_sSrcMap_t.Sample(p_sSamp, input.vUV0.xy).rgb;
-  #if b_iUse8BitHDRPostProcess
-    cColor.rgb *= psGlobals.fHDRScaling;
-  #endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDRPostProcess))
+        cColor.rgb *= psGlobals.fHDRScaling;
   #if b_useBloom
     {
         float3 bloom = p_sBloomMap_t.Sample(p_sSamp, input.vUV0.xy).rgb;
-    #if b_iScaleBloom
-        bloom *= 2.0f;      // Exaggerate bloom to compensate for capped HDR.
-    #endif
+        // Exaggerate bloom to compensate for capped HDR.
+        [branch] if (SC2_AXIS(b_iScaleBloom))
+            bloom *= 2.0f;
         cColor += bloom;
     }
   #endif
@@ -164,12 +180,11 @@ public float4 hdr_ps_main(HDRPSInput input) : SV_Target0
     float fSrcL = dot(c_vLuminanceWeights, cColor);
 
     // White shift.
-  #if (b_useWhiteShift && (b_iOperator != REINHARD_OPERATOR))
+    [branch] if (SC2_AXIS(b_useWhiteShift) && (SC2_AXIS(b_iOperator) != REINHARD_OPERATOR))
     {
         float fRatio = saturate((fSrcL - 1.5f) / fSrcL);
         cColor = lerp(cColor, float3(fSrcL, fSrcL, fSrcL), fRatio);
     }
-  #endif
 
     float fToneMappedL = hdrTonemap(fSrcL);
 
@@ -182,7 +197,9 @@ public float4 hdr_ps_main(HDRPSInput input) : SV_Target0
   #endif
 
     float fAlpha = 1.0;
-  #if (b_iAALumaMode != HDR_LUMA_OFF)
+    const int sc2AALuma = SC2_AXIS(b_iAALumaMode);
+    [branch] if (sc2AALuma != HDR_LUMA_OFF)
+    {
     // Store luma in alpha — see the FXAA description in psantialiasing.fx.
     //
     // NOTE the dangling `else` upstream: the source reads
@@ -192,15 +209,13 @@ public float4 hdr_ps_main(HDRPSInput input) : SV_Target0
     // so the else binds to the SECOND if, not the first — LUMA_EQUAL computes the
     // average and then immediately overwrites it with the dot.  Transcribed as
     // written; only LUMA_OPTIMAL ships anyway.
-    #if (b_iAALumaMode == HDR_LUMA_EQUAL)
-    fAlpha = (cColor.r + cColor.g + cColor.b) / 3.0;
-    #endif
-    #if (b_iAALumaMode == HDR_LUMA_IGNOREBLUE)
-    fAlpha = cColor.r * 0.337 + cColor.g * 0.663;
-    #else
-    fAlpha = dot(cColor, float3(0.299, 0.587, 0.114));
-    #endif
-  #endif
+        [branch] if (sc2AALuma == HDR_LUMA_EQUAL)
+            fAlpha = (cColor.r + cColor.g + cColor.b) / 3.0;
+        [branch] if (sc2AALuma == HDR_LUMA_IGNOREBLUE)
+            fAlpha = cColor.r * 0.337 + cColor.g * 0.663;
+        else
+            fAlpha = dot(cColor, float3(0.299, 0.587, 0.114));
+    }
 
     return float4(cColor, fAlpha);
 #else

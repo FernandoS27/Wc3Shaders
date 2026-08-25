@@ -35,6 +35,7 @@
 // Retail set: 8 VS perms, 82 PS perms.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #ifndef b_iLightDebugMode
 #define b_iLightDebugMode 0
@@ -170,15 +171,13 @@ public float4 deferredlight_ps_main(DeferredLightPSInput vertOut) : SV_Target0
 
     float4 cDiffuse = p_sDiffuseMap_t.Sample(p_sSamp, vOffsetUV);
     float4 cSpecular;
-#if b_useDeffSpecularPower
-    cSpecular = p_sSpecularMap_t.Sample(p_sSamp, vOffsetUV);
-#else
-    cSpecular.rgb = p_sSpecularMap_t.Sample(p_sSamp, vOffsetUV).rgb;
-    cSpecular.a = psGlobals.vSpecColorSpecularity.a;
-#endif
-#if b_iUse8BitHDR
-    cSpecular.a /= psGlobals.vHDRScaling.y;
-#endif
+    // Same SRV either way -- only which channel supplies .a differs.
+    float4 cSpecularSample = p_sSpecularMap_t.Sample(p_sSamp, vOffsetUV);
+    cSpecular.rgb = cSpecularSample.rgb;
+    cSpecular.a = SC2_AXIS(b_useDeffSpecularPower) ? cSpecularSample.a
+                                                  : psGlobals.vSpecColorSpecularity.a;
+    [branch] if (SC2_AXIS(b_iUse8BitHDR))
+        cSpecular.a /= psGlobals.vHDRScaling.y;
 
     // PIXEL_NORMAL / PIXEL_DEPTH are the .rgb / .a of vNormalDepth.
     vNormalDepth.rgb = normalize(vNormalDepth.rgb);
@@ -193,21 +192,21 @@ public float4 deferredlight_ps_main(DeferredLightPSInput vertOut) : SV_Target0
     float3 vPos = mul(psGlobals.mInvViewTransform, vViewPos).xyz;
 
     float3 lightDiffSpecIntensity = float3(0, 0, 0);
-#if (b_iLightType == LIGHTTYPE_POINT)
-    lightDiffSpecIntensity = computePointLight(
-        vNormalDepth.rgb, vPos, psGlobals.vPositionRecipRadius.xyz,
-        psGlobals.vPositionRecipRadius.w, psGlobals.cColorAttenMultiplier.w,
-        cSpecular.w);
-#elif (b_iLightType == LIGHTTYPE_SPOT)
-    lightDiffSpecIntensity = computeSpotLight(
-        vNormalDepth.rgb, vPos, psGlobals.vPositionRecipRadius.xyz,
-        psGlobals.vDirection, psGlobals.vPositionRecipRadius.w,
-        psGlobals.cColorAttenMultiplier.w,
-        psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.x,
-        psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.y,
-        psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.z,
-        cSpecular.w);
-#endif
+    const int iLightType = SC2_AXIS(b_iLightType);
+    [branch] if (iLightType == LIGHTTYPE_POINT)
+        lightDiffSpecIntensity = computePointLight(
+            vNormalDepth.rgb, vPos, psGlobals.vPositionRecipRadius.xyz,
+            psGlobals.vPositionRecipRadius.w, psGlobals.cColorAttenMultiplier.w,
+            cSpecular.w);
+    else [branch] if (iLightType == LIGHTTYPE_SPOT)
+        lightDiffSpecIntensity = computeSpotLight(
+            vNormalDepth.rgb, vPos, psGlobals.vPositionRecipRadius.xyz,
+            psGlobals.vDirection, psGlobals.vPositionRecipRadius.w,
+            psGlobals.cColorAttenMultiplier.w,
+            psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.x,
+            psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.y,
+            psGlobals.vFalloffBiasScaleAndHotSpotMultiplier.z,
+            cSpecular.w);
 
     float4 vShadowMapUV = mul(float4(vPos, 1), psGlobals.mShadowTransform);
 
@@ -246,7 +245,7 @@ public float4 deferredlight_ps_main(DeferredLightPSInput vertOut) : SV_Target0
 #if (b_iLightDebugMode == LIGHT_DEBUG_COLORS)
     // The D3D arm (the GL variant additionally tests the colour products, which are
     // commented out here).  b_iLightDebugMode is 0 across the whole retail set.
-    if (b_iUseSpecular && lightDiffSpecIntensity.y >= 0.02f)
+    if (SC2_AXIS(b_iUseSpecular) && lightDiffSpecIntensity.y >= 0.02f)
     {
         if (cShadowColor.a > 0.0f)
             return float4(0.0f, 0.0f, 1.0f, 1.0f);      // Blue = specular highlight
@@ -266,14 +265,12 @@ public float4 deferredlight_ps_main(DeferredLightPSInput vertOut) : SV_Target0
     float4 result;
     result.rgb = cDiffuse.rgb * psGlobals.cColorAttenMultiplier.xyz
                * lightDiffSpecIntensity.x * cShadowColor.rgb;
-#if b_iUseSpecular
-    result.rgb += cSpecular.rgb * psGlobals.vSpecColorSpecularity.rgb
-                * lightDiffSpecIntensity.y * cShadowColor.rgb;
-#endif
+    [branch] if (SC2_AXIS(b_iUseSpecular))
+        result.rgb += cSpecular.rgb * psGlobals.vSpecColorSpecularity.rgb
+                    * lightDiffSpecIntensity.y * cShadowColor.rgb;
     result.a = 1.0f;
-#if b_iUse8BitHDR
-    result.rgb *= psGlobals.vHDRScaling.x;
-#endif
+    [branch] if (SC2_AXIS(b_iUse8BitHDR))
+        result.rgb *= psGlobals.vHDRScaling.x;
 
     return result;
 }

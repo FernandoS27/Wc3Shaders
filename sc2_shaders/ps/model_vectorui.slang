@@ -8,6 +8,7 @@
 // is 1 on every reachable perm (b_splatAttenuationEnabled is never set), so it DCEs.
 
 implementing sc2_shaders;
+#include "types/perm_cb.slangh"
 
 #define VECTORUI_INVALID  0
 #define VECTORUI_CIRCLE   1
@@ -36,12 +37,12 @@ implementing sc2_shaders;
 // common.fx : SplatAttenuationVectorUI — 1 unless splat attenuation is enabled.
 float splatAttenuationVectorUI(float3 worldPos, float4 vPlane, float scalar, float minHeight)
 {
-#if b_splatAttenuationEnabled
-    float fDist = dot(float4(worldPos, 1.0f), vPlane) * scalar;
-    return 1.0f - saturate(abs(fDist));
-#else
+    [branch] if (SC2_AXIS(b_splatAttenuationEnabled))
+    {
+        float fDist = dot(float4(worldPos, 1.0f), vPlane) * scalar;
+        return 1.0f - saturate(abs(fDist));
+    }
     return 1.0f;
-#endif
 }
 
 // psvectorui.fx : ApplyCircleInfluence.
@@ -60,7 +61,7 @@ void applyCircleInfluence(float2 vPosition, float2 vCircleCenter, float4 vCircle
         finalFactor = innerFactor * outerFactor;
     }
 
-#if b_dashedCircleSplats
+    [branch] if (SC2_AXIS(b_dashedCircleSplats))
     {
         float2 vDir = normalize(vDist);
         float2 xAxis = vCircleDashParams.zw;
@@ -85,15 +86,17 @@ void applyCircleInfluence(float2 vPosition, float2 vCircleCenter, float4 vCircle
 
         finalFactor = min(fDashedFactor, finalFactor);
     }
-#endif
 
     float4 color = cLitColor * finalFactor;
-#if b_additiveSplat
-    cAccumulatedColor += color;
-#else
-    cAccumulatedColor.xyz = lerp(cAccumulatedColor.xyz, color.xyz, color.w);
-    cAccumulatedColor.w *= (1.0f - color.w);
-#endif
+    [branch] if (SC2_AXIS(b_additiveSplat))
+    {
+        cAccumulatedColor += color;
+    }
+    else
+    {
+        cAccumulatedColor.xyz = lerp(cAccumulatedColor.xyz, color.xyz, color.w);
+        cAccumulatedColor.w *= (1.0f - color.w);
+    }
 }
 
 // psvectorui.fx : ApplyCrescentInfulence.
@@ -113,11 +116,13 @@ void applyCrescentInfluence(float2 vPosition, float2 vCircleCenter, float4 vCirc
 
     float finalFactor = innerFactor * outerFactor;
 
-#if b_lowEndShaders
-    cAccumulatedColor = cLitColor * float4(1.0f, 1.0f, 1.0f, finalFactor * 0.5f);
-    cAccumulatedColor.w = 1.0f - cAccumulatedColor.w;
-    return;
-#else
+    [branch] if (SC2_AXIS(b_lowEndShaders))
+    {
+        cAccumulatedColor = cLitColor * float4(1.0f, 1.0f, 1.0f, finalFactor * 0.5f);
+        cAccumulatedColor.w = 1.0f - cAccumulatedColor.w;
+        return;
+    }
+
     float4 innerColor = float4(cLitColor.x, cLitColor.y, cLitColor.z, cLitColor.w * 0.5f);
     float4 edgeColor = float4(cLitColor.x, cLitColor.y, cLitColor.z, 1.0f - cLitColor.w);
 
@@ -134,7 +139,6 @@ void applyCrescentInfluence(float2 vPosition, float2 vCircleCenter, float4 vCirc
     float innerCircleFalloffDistance = 1.0f / (vCircleRadiiParams.y * vInsideCircleRatios.z);
     float innerCircleFactor = 1.0f - saturate((fDist - innerCircleInsideBound) * innerCircleFalloffDistance);
     cAccumulatedColor.w = lerp(cAccumulatedColor.w, 1.0f, innerCircleFactor);
-#endif
 }
 
 // psvectorui.fx : VectorUI.
@@ -144,11 +148,10 @@ float4 vectorUI(ModelPSInput vertOut)
     return float4(0.0f, 0.0f, 0.0f, 1.0f);
 #else
     float4 accumulatedColor;
-  #if b_additiveSplat
-    accumulatedColor = float4(1.0f, 0.0f, 0.0f, 0.0f);
-  #else
-    accumulatedColor = float4(0.0f, 0.0f, 0.0f, 1.0f);
-  #endif
+    [branch] if (SC2_AXIS(b_additiveSplat))
+        accumulatedColor = float4(1.0f, 0.0f, 0.0f, 0.0f);
+    else
+        accumulatedColor = float4(0.0f, 0.0f, 0.0f, 1.0f);
 
     // PIXEL_SHADER_VERSION >= PS_20 is always true for the ps_5_0 target.
   #if (b_iDrawType == VECTORUI_CIRCLE)
@@ -165,11 +168,10 @@ float4 vectorUI(ModelPSInput vertOut)
     return float4(1.0f, 0.0f, 0.0f, 1.0f);
   #endif
 
-  #if b_additiveSplat
-    accumulatedColor = saturate(accumulatedColor);
-  #else
-    accumulatedColor = saturate(float4(accumulatedColor.xyz, 1.0f - accumulatedColor.w));
-  #endif
+    [branch] if (SC2_AXIS(b_additiveSplat))
+        accumulatedColor = saturate(accumulatedColor);
+    else
+        accumulatedColor = saturate(float4(accumulatedColor.xyz, 1.0f - accumulatedColor.w));
 
     // Attenuation factor (SplatAttenuationVectorUI — 1 on every reachable perm).
     accumulatedColor.w *= splatAttenuationVectorUI(vertOut.WorldPos().xyz, vertOut.Vector4(),
